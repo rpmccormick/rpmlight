@@ -503,11 +503,10 @@ class RPMLightEngine:
                 for i in range(num_zones):
                     self.zone_floor[i] = 36.0
             else:
-                min_black_target = 0.0 if (global_mean_peak < 4.5 and max_raw_peak < 10) else 13.0
-                self.shared_black_floor = max(min_black_target, self.shared_black_floor - 0.14)
+                self.shared_black_floor = max(0.0, self.shared_black_floor - 0.14)
                 for i in range(num_zones):
                     self.zone_floor[i] = self.shared_black_floor
-            target_bris = [max(self.shared_black_floor, float(raw_peaks[i])) for i in range(num_zones)]
+            target_bris = [self.shared_black_floor for _ in range(num_zones)]
         else:
             self.was_screen_black = False
             self.shared_black_floor = 36.0
@@ -572,6 +571,10 @@ class RPMLightEngine:
         is_scene_cut = raw_scene_cut and not is_dialogue_ping_pong
         nl_trans = 0 if is_scene_cut else (2 if b_norm < 0.30 else 1)
 
+        uni_r = sum(c[0] for c in self.ema_chroma) / num_zones
+        uni_g = sum(c[1] for c in self.ema_chroma) / num_zones
+        uni_b = sum(c[2] for c in self.ema_chroma) / num_zones
+
         for i in range(num_zones):
             prev_c = raw_colors[(i - 1) % num_zones]
             curr_c = raw_colors[i]
@@ -585,7 +588,7 @@ class RPMLightEngine:
             s_min = min(sr, sg, sb)
             s_sat = (s_peak - s_min) / s_peak if s_peak > 0.0 else 0.0
 
-            if s_peak >= 4.0:
+            if (not is_screen_black) and s_peak >= 4.0:
                 tr = sr / s_peak
                 tg = sg / s_peak
                 tb = sb / s_peak
@@ -594,8 +597,12 @@ class RPMLightEngine:
                 else:
                     c_alpha = 0.12 + 0.26 * b_norm
             else:
-                tr, tg, tb = 0.98, 0.94, 0.88
-                c_alpha = 0.045
+                prev_ch = self.ema_chroma[(i - 1) % num_zones]
+                next_ch = self.ema_chroma[(i + 1) % num_zones]
+                tr = 0.55 * uni_r + 0.225 * prev_ch[0] + 0.225 * next_ch[0]
+                tg = 0.55 * uni_g + 0.225 * prev_ch[1] + 0.225 * next_ch[1]
+                tb = 0.55 * uni_b + 0.225 * prev_ch[2] + 0.225 * next_ch[2]
+                c_alpha = 0.22 if is_screen_black else 0.06
 
             cr = self.ema_chroma[i][0] + c_alpha * (tr - self.ema_chroma[i][0])
             cg = self.ema_chroma[i][1] + c_alpha * (tg - self.ema_chroma[i][1])
@@ -620,6 +627,8 @@ class RPMLightEngine:
                 b_alpha = b_up if t_bri > p_bri else b_dn
 
             new_bri = p_bri + b_alpha * (t_bri - p_bri)
+            if is_screen_black and self.shared_black_floor <= 0.05 and new_bri < 1.2:
+                new_bri = 0.0
             self.ema_bri[i] = new_bri
 
             w_lumen = (
@@ -635,7 +644,7 @@ class RPMLightEngine:
             ib = max(0, min(255, int(round(self.ema_chroma[i][2] * eff_bri))))
 
             old_r, old_g, old_b = self.sent_rgb[i]
-            deadband = 5 if max(old_r, old_g, old_b) < 52 else 3
+            deadband = 0 if (is_screen_black or new_bri < 32.0) else (5 if max(old_r, old_g, old_b) < 52 else 3)
             if abs(ir - old_r) <= deadband and abs(ig - old_g) <= deadband and abs(ib - old_b) <= deadband:
                 ir, ig, ib = old_r, old_g, old_b
             else:
