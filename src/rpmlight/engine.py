@@ -154,8 +154,12 @@ def build_depth_glow_boxes(
 
         ix0 = int(round(ix_min + u * ispan_x))
         iy0 = int(round(iy_min + v * ispan_y))
+        cur_ih = ih
+        if ey0 >= 152:
+            iy0 = 88
+            cur_ih = 46
         iy_idx, iuv_idx = _precompute_box_indices(
-            width, ix0, iy0, min(width, ix0 + iw), min(height, iy0 + ih), step=8
+            width, ix0, iy0, min(width, ix0 + iw), min(height, iy0 + cur_ih), step=8
         )
 
         precomputed.append((pid, ey_idx, euv_idx, iy_idx, iuv_idx))
@@ -406,19 +410,16 @@ class RPMLightEngine:
                 e_min = min(er, eg, eb)
                 e_sat = (e_max - e_min) / e_max if e_max > 0 else 0.0
 
+                is_bottom_zone = z_i <= 6 or z_i >= 46
                 if (z_i & 1) == parity or self._frame_idx == 1:
-                    is_bottom_sub_zone = z_i <= 6 or z_i >= 46
-                    use_inner_magnet = (
-                        is_extra or (not is_bottom_sub_zone) or (e_max >= 165 and e_sat < 0.38)
-                    )
                     self.cached_inner_rgb[z_i] = sample_box_fast(
                         y_plane,
                         u_plane,
                         v_plane,
                         iy_idx,
                         iuv_idx,
-                        chroma_magnet=use_inner_magnet,
-                        ignore_bright_matte=use_inner_magnet,
+                        chroma_magnet=True,
+                        ignore_bright_matte=True,
                     )
                 ir, ig, ib = self.cached_inner_rgb[z_i]
                 i_max = max(ir, ig, ib)
@@ -442,18 +443,27 @@ class RPMLightEngine:
                     abs(i_unit_r - e_unit_r) + abs(i_unit_g - e_unit_g) + abs(i_unit_b - e_unit_b)
                 )
 
-                is_distinct_pip = i_max >= 24 and i_sat >= 0.22 and unit_hue_dist >= 0.48
+                is_distinct_pip = (
+                    (not is_bottom_zone) and i_max >= 24 and i_sat >= 0.22 and unit_hue_dist >= 0.48
+                )
                 inner_has_color = i_max >= 22 and (
                     is_distinct_pip
-                    or (i_sat > e_sat + 0.08 and i_sat >= 0.20)
-                    or (e_max < 45 and i_sat >= 0.24)
-                    or (e_max >= 165 and e_sat < 0.38 and i_sat >= 0.16)
+                    or (i_sat > e_sat + 0.08 and i_sat >= 0.18)
+                    or (e_max < 45 and i_sat >= 0.22)
+                    or (e_max >= 120 and e_sat < 0.38 and i_sat >= 0.16)
                 )
                 if edge_delta >= 38.0:
                     self.zone_depth_mix[z_i] = max(0.0, self.zone_depth_mix[z_i] - 0.22)
                 elif inner_has_color:
-                    max_depth = 0.82 if (is_extra or is_distinct_pip) else 0.58
-                    step_up = 0.055 if is_distinct_pip else 0.018
+                    if is_bottom_zone:
+                        max_depth = 0.55 if is_extra else 0.36
+                        step_up = 0.009
+                    elif is_distinct_pip or is_extra:
+                        max_depth = 0.82
+                        step_up = 0.055
+                    else:
+                        max_depth = 0.58
+                        step_up = 0.018
                     self.zone_depth_mix[z_i] = min(max_depth, self.zone_depth_mix[z_i] + step_up)
                 else:
                     self.zone_depth_mix[z_i] = max(0.0, self.zone_depth_mix[z_i] - 0.04)
