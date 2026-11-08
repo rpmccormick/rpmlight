@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rpmlight"
+version = "0.2.0"
+description = "Perceptual Zero-Blink Camera & Screen Ambilight Engine (Decoupled Fast-Hue / Slow-Brightness, Constant-Lumen Wall Matching, Schmitt-Trigger Falling Baseline & Time-Depth Fade-In)"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+authors = [
+    { name = "Ryan McCormick", email = "rpmccormick@users.noreply.github.com" },
+]
+keywords = [
+    "ambilight",
+    "nanoleaf",
+    "nanoleaf-4d",
+    "wled",
+    "home-assistant",
+    "mqtt",
+    "brilliant",
+    "gstreamer",
+    "hyperion",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Home Automation",
+    "Topic :: Multimedia :: Video",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.4.0",
+]
+
+[project.scripts]
+rpmlight = "rpmlight.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/rpmccormick/rpmlight"
+Repository = "https://github.com/rpmccormick/rpmlight"
+Issues = "https://github.com/rpmccormick/rpmlight/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rpmlight"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
