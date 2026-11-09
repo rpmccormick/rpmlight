@@ -1,4 +1,4 @@
-"""Output Sinks for RPMLight (Nanoleaf 4D UDP v2, WLED Realtime UDP, and MiniMQTT)."""
+"""Output Sinks for RPMLight (Nanoleaf 4D UDP v2, WLED Realtime UDP, MiniMQTT, and Kodi OSD Toast)."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ def _mqtt_str(s: str) -> bytes:
 
 
 class MiniMqttPublisher:
-    """Zero-dependency raw socket MQTT v3.1.1 publisher for ceiling Sky Hue lights."""
+    """Zero-dependency raw socket MQTT v3.1.1 publisher for ceiling Sky Hue lights & HA status."""
 
     def __init__(
         self,
@@ -117,13 +117,14 @@ class NanoleafUdpSink:
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._target = (ip, udp_port)
 
-    def activate_extcontrol(self) -> bool:
+    def activate_extcontrol(self, brightness: int = 85) -> bool:
         """Enable External Control v2 via the Nanoleaf HTTP API."""
         if not self.token:
             return False
         base_url = f"http://{self.ip}:{self.http_port}/api/v1/{self.token}"
         try:
-            state_payload = json.dumps({"on": {"value": True}, "brightness": {"value": 100}}).encode(
+            bri = max(1, min(100, int(brightness)))
+            state_payload = json.dumps({"on": {"value": True}, "brightness": {"value": bri}}).encode(
                 "utf-8"
             )
             req_state = urllib.request.Request(
@@ -144,6 +145,25 @@ class NanoleafUdpSink:
                 headers={"Content-Type": "application/json"},
             )
             urllib.request.urlopen(req_eff, timeout=4).close()
+            return True
+        except Exception:
+            return False
+
+    def set_brightness(self, brightness: int) -> bool:
+        """Set Master hardware brightness (1..100%) on the Nanoleaf controller."""
+        if not self.token:
+            return False
+        base_url = f"http://{self.ip}:{self.http_port}/api/v1/{self.token}"
+        try:
+            bri = max(1, min(100, int(brightness)))
+            payload = json.dumps({"brightness": {"value": bri}}).encode("utf-8")
+            req = urllib.request.Request(
+                f"{base_url}/state",
+                data=payload,
+                method="PUT",
+                headers={"Content-Type": "application/json"},
+            )
+            urllib.request.urlopen(req, timeout=3).close()
             return True
         except Exception:
             return False
@@ -184,3 +204,40 @@ class WledUdpSink:
 
     def send_zones(self, zones_rgb: list[tuple[int, int, int]]) -> None:
         self._sock.sendto(self.encode_drgb_packet(zones_rgb), self._target)
+
+
+class KodiJsonRpcToastSink:
+    """Direct local Kodi JSON-RPC OSD notification sink (never switches TV HDMI input)."""
+
+    def __init__(self, host: str, port: int = 8080, display_time_ms: int = 4500) -> None:
+        self.host = host
+        self.port = port
+        self.display_time_ms = display_time_ms
+        self.url = f"http://{host}:{port}/jsonrpc"
+
+    def send_toast(self, title: str, message: str, image: str = "info") -> bool:
+        """Display an on-screen toast overlay on Kodi via GUI.ShowNotification."""
+        payload = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "GUI.ShowNotification",
+                "params": {
+                    "title": title,
+                    "message": message,
+                    "image": image,
+                    "displaytime": self.display_time_ms,
+                },
+            }
+        ).encode("utf-8")
+        try:
+            req = urllib.request.Request(
+                self.url,
+                data=payload,
+                method="POST",
+                headers={"Content-Type": "application/json"},
+            )
+            urllib.request.urlopen(req, timeout=1.5).close()
+            return True
+        except Exception:
+            return False

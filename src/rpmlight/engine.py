@@ -1,43 +1,47 @@
-"""Core Perceptual Multi-Zone RPMLight Ambilight Engine.
+"""Core Perceptual Multi-Zone RPMLight Ambilight Engine (v0.3.0).
 
-Implements five key perceptual & temporal innovations that eliminate the blinking,
-strobing, and color-contamination problems of conventional camera/screen Ambilights:
+Implements six key perceptual & temporal innovations that eliminate the blinking,
+strobing, letterbox black-bar starvation, and red/dark-infection problems of
+conventional camera/screen Ambilights:
 
-1. **Decoupled Fast-Hue / Super-Slow-Brightness Tracking**:
-   - Unit-normalized chromaticity (`ema_chroma`) updates immediately (`c_alpha = 0.64`)
-     when colors move across the edge, while zone brightness (`ema_bri`) glides on a
-     slow `~1.2s–1.8s` envelope unless a true full-screen Scene Cut (`>= 22` zones
-     shifting brightness at once) is detected.
-2. **Perceptual Constant-Lumen Wall Matching**:
+1. **3-Step Orthogonal Auto-Blackness Deletion (2.35:1 Letterbox, Kodi Rows & 4:3 Pillarbox)**:
+   - Each of the 52 perimeter zones precomputes 3 orthogonal inward march steps:
+     - `Step 0`: True 16:9 outer edge (lifted off the bottom plastic bezel to `y = 155..164`).
+     - `Step 1`: Moderate inward march (`14px` deeper vertically for top/bottom, `16px`
+       horizontally for left/right).
+     - `Step 2`: Deep inward march (`28px` deeper vertically to `y = 30..44` top / `y = 124..138`
+       bottom for `2.35:1` widescreen movies & Kodi poster shelves; `32px` horizontally for
+       `4:3` pillarbars).
+   - Whenever an outer step reads black (`e_max < 26`), the zone automatically marches
+     inward orthogonally until it hits real picture content, caching its active step for
+     zero-overhead 20 FPS performance.
+2. **Unbiased Bayer `bggr` Fringe Cancellation & Brown/Tan/Skin/Wood Protection**:
+   - Uses symmetric per-pixel luma weighting (`luma_f = yv - 8`) inside `sample_box_fast()`
+     so `+v` (red) and `-v` (cyan/green) Bayer demosaicing fringes along horizontal black
+     bars cancel to zero instead of biasing toward red.
+   - Distinguishes true vivid crimson (`ym >= 48, vm >= 24, um >= -5`) from warm brown,
+     tan, wood, and skin tones so dark scenes never suffer from "red infection".
+3. **Decoupled Fast-Hue / Super-Slow-Brightness Tracking**:
+   - Unit-normalized chromaticity (`ema_chroma`) updates immediately when colors move
+     across the edge, while zone brightness (`ema_bri`) glides on a slow envelope unless
+     a full-screen Scene Cut (`>= 22` zones shifting brightness at once) is detected.
+4. **Perceptual Constant-Lumen Wall Matching**:
    - Equalizes perceived wall brightness across 3-diode White (`W = 1.0`) vs. 1-diode
-     Red/Blue (`W = 0.22..0.32`) via `W = 0.32*R + 0.46*G + 0.22*B` so rapid hue
-     rotations never flash brighter or dimmer on the wall.
-3. **Time-Dependent Falling Baseline with Schmitt Trigger, Neighbor-Rescue & Anti-Hotspot**:
-   - When a zone first goes dark (e.g. a gray suit passing by), its brightness floor
-     holds at the **Baseline Midpoint (`38.0`)** so nothing blinks off.
-   - Only when a 5-zone neighborhood sits in sustained darkness does the floor slowly
-     decay (`~9.5s`) down to **"On Just a Little Bit" (`14.0`)**, or `0.0` when the
-     entire screen is pitch black.
-   - **Schmitt Trigger** ignores slight camera flicker during decay, while **Neighbor
-     Rescue** cascades dark spots back up to the Baseline whenever neighboring zones
-     are lit, and **Anti-Hotspot Equalization** pulls lingering bright spots briskly
-     down to the uniform Baseline before all zones dim together on black screens.
-4. **Time-Depth Inner Fade-In (`zone_depth_mix`)**:
-   - Tracks 100% pure outer-edge color whenever the edge is changing (`edge_delta >= 22`),
-     and when the outer edge stops changing while a colorful region sits just inside the
-     border (e.g. Polaroid collage frames or static stage borders), slowly fades in over
-     `~3.5s` to a 50/50 average between the outer edge and inner color.
-5. **Bayer `bggr` Fringe Cancellation, Subtitle Avoidance & Live-Action Shadow White-Mix**:
-   - Neutralizes camera Bayer demosaicing teal/blue edge fringes, keeps bottom outer
-     sampling boxes below 2-line TV subtitles, lifts the camera black pedestal (`ym - 6`),
-     and blends warm white into shadowed colors so dark red-and-white flags stay
-     red-and-white instead of turning black-and-red.
+     Red/Blue (`W = 0.22..0.32`) via `W = 0.32*R + 0.46*G + 0.22*B`.
+5. **Time-Dependent Falling Baseline with Anti-Dark-Infection Floor**:
+   - Holds newly dark zones at the Baseline Midpoint (`38.0`), never drops below `24.0`
+     while a movie is actively playing (eliminating dead black holes), and smoothly fades
+     all zones together down to `0.0` when the entire screen is black.
+6. **Single-Slider Perceptual Curve (`1%–100%`)**:
+   - Maps a single dimmer slider across Night Glow (`1–25%`), Smooth Blend (`25–50%`),
+     Balanced Sweet Spot (`50%`), Crisp & Fast Action (`50–75%`), and Deep Vivid Rainbow
+     (`75–100%`).
 """
 
 from __future__ import annotations
 
 import colorsys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 DEFAULT_CROP_W = 320
 DEFAULT_CROP_H = 176
@@ -45,7 +49,7 @@ DEFAULT_CROP_H = 176
 
 @dataclass(frozen=True)
 class ZoneFrameResult:
-    """Computed 52-zone RGB output, transition time, scene-cut flag, and overhead sky."""
+    """Computed 52-zone RGB output, transition time, scene-cut flag, and overhead/wing sky."""
 
     zones_rgb: list[tuple[int, int, int]]
     nl_transition_ds: int
@@ -54,6 +58,99 @@ class ZoneFrameResult:
     up_bri: int
     down_rgb: list[int]
     down_bri: int
+    left_rgb: list[int] = field(default_factory=lambda: [255, 195, 145])
+    left_bri: int = 32
+
+
+@dataclass(frozen=True)
+class SliderCurveParams:
+    """Continuous perceptual parameters derived from a single 1-100% slider."""
+
+    slider_pct: int
+    blinkiness: int
+    nl_Master_brightness: int
+    edge_only_mix: float
+    chroma_bleed_weight: float
+    hue_max_bri: int
+
+
+def apply_slider_curve(slider_pct: int) -> SliderCurveParams:
+    """Map a single 1..100% user slider to RPMLight's continuous perceptual curve."""
+    pct = max(1, min(100, int(slider_pct)))
+    if pct <= 25:
+        # 1%..25%: Night Glow -> Smooth Cinematic
+        t = (pct - 1) / 24.0
+        nl_bri = int(round(12 + t * 53))  # 12% -> 65%
+        blinkiness = int(round(8 + t * 64))  # 8 -> 72
+        edge_only_mix = 0.0
+        chroma_bleed = 0.50 - t * 0.12  # 0.50 -> 0.38
+        hue_max_bri = int(round(36 + t * 64))  # 36 -> 100
+    elif pct <= 50:
+        # 25%..50%: Smooth Cinematic -> Default 50% Sweet Spot
+        t = (pct - 25) / 25.0
+        nl_bri = int(round(65 + t * 20))  # 65% -> 85%
+        blinkiness = int(round(72 + t * 68))  # 72 -> 140
+        edge_only_mix = 0.0
+        chroma_bleed = 0.38 - t * 0.16  # 0.38 -> 0.22
+        hue_max_bri = int(round(100 + t * 40))  # 100 -> 140
+    elif pct <= 75:
+        # 50%..75%: Default Sweet Spot -> Crisp Pure Edge + Faster Action
+        t = (pct - 50) / 25.0
+        nl_bri = int(round(85 + t * 15))  # 85% -> 100%
+        blinkiness = int(round(140 + t * 75))  # 140 -> 215
+        edge_only_mix = t * 0.85  # 0.0 -> 0.85
+        chroma_bleed = 0.22 * (1.0 - t)  # 0.22 -> 0.0
+        hue_max_bri = int(round(140 + t * 45))  # 140 -> 185
+    else:
+        # 75%..100%: Crisp Pure Edge -> Deep Vivid Rainbow (deep inner color + max speed)
+        t = (pct - 75) / 25.0
+        nl_bri = 100
+        blinkiness = int(round(215 + t * 40))  # 215 -> 255
+        edge_only_mix = 0.85 * (1.0 - t)  # 0.85 -> 0.0 (re-enables deep inner color at 100%!)
+        chroma_bleed = 0.0
+        hue_max_bri = int(round(185 + t * 55))  # 185 -> 240
+    return SliderCurveParams(
+        slider_pct=pct,
+        blinkiness=blinkiness,
+        nl_Master_brightness=nl_bri,
+        edge_only_mix=edge_only_mix,
+        chroma_bleed_weight=chroma_bleed,
+        hue_max_bri=hue_max_bri,
+    )
+
+
+def describe_slider_setting(slider_pct: int, is_on: bool = True) -> tuple[str, str]:
+    """Return a concise (title, message) description for TV OSD toasts & HA status."""
+    if not is_on:
+        return (
+            "TV AmbiLED: OFF",
+            "Ambilight off — restoring warm white room lighting",
+        )
+    pct = max(1, min(100, int(slider_pct)))
+    if pct <= 20:
+        return (
+            f"TV AmbiLED: {pct}% (Night Glow)",
+            "Dim, ultra-relaxed ambient halo for dark-room viewing",
+        )
+    if pct <= 42:
+        return (
+            f"TV AmbiLED: {pct}% (Smooth Blend)",
+            "Soft, dreamy color transitions with wide neighbor blending",
+        )
+    if pct <= 58:
+        return (
+            f"TV AmbiLED: {pct}% (Balanced Sweet Spot)",
+            "Auto-crops black bars with zero-blink brightness & natural colors",
+        )
+    if pct <= 80:
+        return (
+            f"TV AmbiLED: {pct}% (Crisp & Fast)",
+            "Tight edge tracking & snappy action response",
+        )
+    return (
+        f"TV AmbiLED: {pct}% (Deep Vivid Rainbow)",
+        "Max speed, full brightness & deep inner-screen color reach",
+    )
 
 
 def build_52_panel_coords() -> list[tuple[int, int, int]]:
@@ -124,7 +221,7 @@ def build_depth_glow_boxes(
     width: int = DEFAULT_CROP_W,
     height: int = DEFAULT_CROP_H,
 ) -> list[tuple[int, list[int], list[int], list[int], list[int]]]:
-    """Precompute a tight Outer Edge Strip + a 36x42 Deep Inner Strip per zone."""
+    """Precompute a tight Outer Edge Strip + a Deep Inner Strip per zone."""
     ex_min, ex_max, ey_min, ey_max, ew, eh = 3, 315, 2, 170, 16, 14
     espan_x = (ex_max - ex_min) - ew
     espan_y = (ey_max - ey_min) - eh
@@ -141,13 +238,12 @@ def build_depth_glow_boxes(
         ex0 = int(round(ex_min + u * espan_x))
         ey0 = int(round(ey_min + v * espan_y))
         cur_eh = eh
-        # Avoid bottom-right slideshow clock overlays (x=282..315, y=154..170)
         if ex0 >= 265 and ey0 >= 142:
             ey0 = 138
-        # Keep bottom-edge boxes at y=162..170 (below 2-line TV/Kodi subtitles at y=138..160)
         elif ey0 >= 152:
-            ey0 = 162
-            cur_eh = 8
+            # Lift bottom edge off y=165..170 bezel reflection to y=155..164
+            ey0 = 155
+            cur_eh = 9
         ey_idx, euv_idx = _precompute_box_indices(
             width, ex0, ey0, min(width, ex0 + ew), min(height, ey0 + cur_eh), step=3
         )
@@ -166,11 +262,79 @@ def build_depth_glow_boxes(
     return precomputed
 
 
+def build_auto_crop_depth_boxes(
+    width: int = DEFAULT_CROP_W,
+    height: int = DEFAULT_CROP_H,
+) -> list[tuple[int, list[tuple[list[int], list[int]]], list[int], list[int]]]:
+    """Precompute 3-Step Orthogonal Auto-Blackness Deletion Edge Strips + Deep Inner Strip.
+
+    - Step 0: 16:9 full-screen edge (bottom lifted to y=155..164 to avoid bezel reflections).
+    - Step 1: Moderate inward march (y=16..30 top, y=140..152 bottom, x+16 left, x-16 right).
+    - Step 2: Deep inward march (y=30..44 top, y=124..138 bottom, x+32 left, x-32 right)
+      to automatically skip 2.35:1 widescreen letterbox bars, Kodi inset poster shelves,
+      and 4:3 pillarbox bars while preserving horizontal X (for top/bottom) and vertical Y
+      (for left/right).
+    """
+    ex_min, ex_max, ey_min, ey_max, ew, eh = 3, 315, 2, 170, 16, 14
+    espan_x = (ex_max - ex_min) - ew
+    espan_y = (ey_max - ey_min) - eh
+
+    ix_min, ix_max, iy_min, iy_max, iw, ih = 18, 302, 18, 154, 54, 44
+    ispan_x = (ix_max - ix_min) - iw
+    ispan_y = (iy_max - iy_min) - ih
+
+    precomputed: list[tuple[int, list[tuple[list[int], list[int]]], list[int], list[int]]] = []
+    for pid, nx, ny in build_52_panel_coords():
+        u = nx / 850.0
+        v = 1.0 - (ny / 450.0)
+
+        ex0 = int(round(ex_min + u * espan_x))
+        ey0 = int(round(ey_min + v * espan_y))
+
+        edge_steps: list[tuple[list[int], list[int]]] = []
+        if ny == 0:
+            # Bottom edge (pid 0..8 and 44..51): march straight UP at the exact same X
+            if ex0 >= 265:
+                step_rects = [(ex0, 138, ew, 12), (ex0, 126, ew, 14), (ex0, 114, ew, 14)]
+            else:
+                step_rects = [(ex0, 155, ew, 9), (ex0, 140, ew, 12), (ex0, 124, ew, 14)]
+        elif ny == 450:
+            # Top edge (pid 18..34): march straight DOWN at the exact same X
+            step_rects = [(ex0, 2, ew, 14), (ex0, 16, ew, 14), (ex0, 30, ew, 14)]
+        elif nx == 0:
+            # Left edge (pid 9..17): march straight RIGHT at the exact same Y (Step 2 = x=42..58 for 4:3)
+            step_rects = [(3, ey0, ew, eh), (22, ey0, ew, eh), (42, ey0, ew, eh)]
+        else:
+            # Right edge (pid 35..43): march straight LEFT at the exact same Y (Step 2 = x=260..276 for 4:3)
+            step_rects = [(ex0, ey0, ew, eh), (ex0 - 19, ey0, ew, eh), (ex0 - 39, ey0, ew, eh)]
+
+        for sx0, sy0, sw, sh in step_rects:
+            sx0_c = max(0, min(width - sw, sx0))
+            sy0_c = max(0, min(height - sh, sy0))
+            edge_steps.append(
+                _precompute_box_indices(width, sx0_c, sy0_c, sx0_c + sw, sy0_c + sh, step=3)
+            )
+
+        ix0 = int(round(ix_min + u * ispan_x))
+        iy0 = int(round(iy_min + v * ispan_y))
+        cur_ih = ih
+        if ny == 0:
+            iy0 = 88
+            cur_ih = 46
+        iy_idx, iuv_idx = _precompute_box_indices(
+            width, ix0, iy0, min(width, ix0 + iw), min(height, iy0 + cur_ih), step=8
+        )
+
+        precomputed.append((pid, edge_steps, iy_idx, iuv_idx))
+    return precomputed
+
+
 def build_diamond_boxes(width: int = DEFAULT_CROP_W) -> dict[str, tuple[list[int], list[int]]]:
-    """Precompute Top-33% Center-80% unified overhead ceiling sky sampling boxes."""
+    """Precompute overhead ceiling sky boxes + far-left wing box (for Kitchen Cabinet sync)."""
     return {
         "sky_left": _precompute_box_indices(width, 40, 8, 160, 56, step=12),
         "sky_right": _precompute_box_indices(width, 160, 8, 280, 56, step=12),
+        "far_left": _precompute_box_indices(width, 8, 28, 72, 144, step=10),
     }
 
 
@@ -183,7 +347,7 @@ def sample_box_fast(
     chroma_magnet: bool = True,
     ignore_bright_matte: bool = False,
 ) -> tuple[int, int, int]:
-    """Extract perceptual RGB from an I420 sampling box with Bayer fringe suppression."""
+    """Extract perceptual RGB from an I420 box with symmetric Bayer cancellation & brown protection."""
     y_acc = 0
     u_acc = 0
     v_acc = 0
@@ -197,8 +361,7 @@ def sample_box_fast(
         u = u_plane[uv_i] - 128
         v = v_plane[uv_i] - 128
 
-        # Neutralize bggr sensor false teal/green offset ONLY on bright white/light-gray pixels (yv >= 85),
-        # NEVER on dark/mid-tone navy-blue backgrounds (where yv=10..75 and u=+2..+25, v=-2..-20 is REAL blue!)
+        # Neutralize bggr sensor false teal/green offset ONLY on bright white/light-gray pixels (yv >= 85)
         if yv >= 85 and -8 <= u <= 24 and -24 <= v <= 4 and (u * u + v * v) < 750:
             u = int(u * 0.25)
             v = int(v * 0.25)
@@ -207,15 +370,10 @@ def sample_box_fast(
             v = int(v * 1.35)
         uv_sq = u * u + v * v
 
-        vr = (v * 380) >> 8
-        ub = (u * 320) >> 8
-        chroma_lift = vr if vr > ub else ub
-        if chroma_lift < 0:
-            chroma_lift = 0
-        peak_ch = yv + chroma_lift
-        luma_sum += peak_ch
-
-        luma_f = peak_ch - 8
+        # Symmetric per-pixel luma weighting: never bias weight by +v before averaging,
+        # so +v (red) and -v (cyan/green) Bayer fringes along letterbox bars cancel to zero!
+        luma_sum += yv
+        luma_f = yv - 8
         if luma_f <= 0:
             w = 1
         else:
@@ -231,7 +389,7 @@ def sample_box_fast(
                 else:
                     matte_damp = 64
                 uv_eff = 550 if uv_sq > 550 else uv_sq
-                chroma_f = uv_eff - 110
+                chroma_f = uv_eff - 135
                 if chroma_f < 0:
                     chroma_f = 0
                 w = 4 + ((((luma_f >> 2) + ((chroma_f * luma_f) >> 9)) * matte_damp) >> 6)
@@ -248,40 +406,66 @@ def sample_box_fast(
     ym = y_acc // w_acc
     um = u_acc // w_acc
     vm = v_acc // w_acc
+
+    # Suppress warm/red camera sensor noise in dark/shadowed regions (ym < 38)
+    if ym < 38 and vm > 0 and vm < 18 and um >= -12:
+        vm = int(vm * 0.35)
+        um = int(um * 0.50)
+
     uvm_sq = um * um + vm * vm
 
     if ym >= 75:
         taper_limit = 220.0 if (um > 0 and vm <= 4) else 160.0
     else:
-        taper_limit = 14.0
+        taper_limit = 24.0
     if uvm_sq < taper_limit:
         c_taper = (uvm_sq / taper_limit) ** 1.2
         um = int(round(um * c_taper))
         vm = int(round(vm * c_taper))
 
-    win_peak = ym + max(0, (vm * 380) >> 8, (um * 320) >> 8)
+    # Only allow +v (red) to lift perceived window peak if it is genuinely vivid red (vm >= 20)
+    v_lift = ((vm * 300) >> 8) if vm >= 20 else 0
+    u_lift = ((um * 320) >> 8) if um >= 12 else 0
+    win_peak = ym + max(0, v_lift, u_lift)
     if mean_luma < 20.0 and uvm_sq < 25:
         win_peak = min(win_peak, int(mean_luma * 1.75))
 
     pw = min(0.65, max(0.0, (mean_luma - 9.0) / 18.0) * 0.65)
     eff_luma = (1.0 - pw) * mean_luma + pw * float(win_peak)
-    if eff_luma < 7.8:
+    if eff_luma < 8.5:
         return (0, 0, 0)
 
-    if eff_luma < 14.0:
-        chroma_scale = max(0.35, (eff_luma - 7.8) / 6.2)
+    if eff_luma < 16.0:
+        chroma_scale = max(0.30, (eff_luma - 8.5) / 7.5)
         um = int(round(um * chroma_scale))
         vm = int(round(vm * chroma_scale))
 
     c = ym - 6
     if c < 3:
         c = 3
-    r = (298 * c + 409 * vm + 128) >> 8
-    g = (298 * c - 100 * um - 208 * vm + 128) >> 8
+
+    # Brown / Tan / Skin / Wood protection:
+    # RGB LEDs have no "brown" diode and turn brown/tan/wood blood-red unless G & B are preserved.
+    is_vivid_red = ym >= 48 and vm >= 24 and um >= -5
+    if vm > 0 and not is_vivid_red:
+        r = (298 * c + 340 * vm + 128) >> 8
+        g = (298 * c - 100 * um - 150 * vm + 128) >> 8
+    else:
+        r = (298 * c + 409 * vm + 128) >> 8
+        g = (298 * c - 100 * um - 208 * vm + 128) >> 8
     b = (298 * c + 516 * um + 128) >> 8
     r = 0 if r < 0 else (255 if r > 255 else r)
     g = 0 if g < 0 else (255 if g > 255 else g)
     b = 0 if b < 0 else (255 if b > 255 else b)
+
+    # Warm golden-tan floor for brown/wood/skin tones
+    if r > g and vm > 0 and not is_vivid_red:
+        min_g = int(round(r * 0.72))
+        min_b = int(round(r * 0.42))
+        if g < min_g:
+            g = min_g
+        if b < min_b:
+            b = min_b
 
     if r >= 125 and g >= 38 and b >= 26 and r > g * 1.25 and b <= g * 1.35:
         b = min(255, max(b, int(round(g * 1.18))))
@@ -292,15 +476,14 @@ def sample_box_fast(
 
     h, s, v = colorsys.rgb_to_hsv(rf, gf, bf)
     if s > 0.14:
-        if h < 0.08 or h > 0.88:
-            sat_boost = 1.05 if s < 0.72 else 1.20
+        if h < 0.09 or h > 0.88:
+            # Never over-boost weak red/brown hues into blood red
+            sat_boost = 0.85 if s < 0.68 else 1.12
         else:
             sat_boost = 1.32
         s = min(1.0, 0.14 + (s - 0.14) * sat_boost)
-        # Live-Action Shadow White-Mix: in dark/shadowed regions (true luma ym < 48),
-        # cap saturation to mix warm white into the color so shadowed flags stay red-and-white!
-        if ym < 48:
-            max_s = 0.58 + 0.42 * min(1.0, max(0.0, (ym - 10.0) / 38.0))
+        if ym < 52:
+            max_s = 0.50 + 0.50 * min(1.0, max(0.0, (ym - 12.0) / 40.0))
             if s > max_s:
                 s = max_s
     else:
@@ -316,9 +499,9 @@ def sample_box_fast(
         v_out *= 0.54
 
     rf2, gf2, bf2 = colorsys.hsv_to_rgb(h, s, min(1.0, v_out))
-    r_gain = 242.0 - 12.0 * min(1.0, s / 0.20)
-    g_gain = 240.0 + 5.0 * min(1.0, s / 0.20)
-    b_gain = 236.0 + 19.0 * min(1.0, s / 0.20)
+    r_gain = 232.0 - 8.0 * min(1.0, s / 0.20)
+    g_gain = 242.0 + 6.0 * min(1.0, s / 0.20)
+    b_gain = 238.0 + 17.0 * min(1.0, s / 0.20)
     return (
         max(0, min(255, int(round(rf2 * r_gain)))),
         max(0, min(255, int(round(gf2 * g_gain)))),
@@ -346,7 +529,7 @@ def hue_color_and_bri(rgb: tuple[int, int, int], max_bri: int = 140) -> tuple[li
 
 
 class RPMLightEngine:
-    """Stateful 52-zone Perceptual Zero-Blink Ambilight Processor."""
+    """Stateful 52-zone Perceptual Zero-Blink Ambilight Processor with Auto-Blackness Deletion."""
 
     def __init__(
         self,
@@ -355,6 +538,7 @@ class RPMLightEngine:
         *,
         mode: str = "normal",
         blinkiness: int = 128,
+        slider_pct: int | None = None,
     ) -> None:
         self.width = width
         self.height = height
@@ -362,18 +546,28 @@ class RPMLightEngine:
         self.uv_size = (width // 2) * (height // 2)
         self.mode = mode
         self.blinkiness = max(0, min(255, blinkiness))
+        self.slider_pct = 50
+        self.edge_only_mix = 0.0
+        self.chroma_bleed_weight = 0.22
+        self.nl_Master_brightness = 85
+        self.hue_max_bri = int(round(90 + 95 * (self.blinkiness / 255.0)))
+        if slider_pct is not None:
+            self.set_slider_pct(slider_pct)
 
         self.boxes_depth_glow = build_depth_glow_boxes(width, height)
+        self.boxes_auto_crop = build_auto_crop_depth_boxes(width, height)
         self.boxes_true_edge = build_sampling_boxes(width, height)
         self.diamond_boxes = build_diamond_boxes(width)
-        self.num_zones = len(self.boxes_depth_glow)
+        self.num_zones = len(self.boxes_auto_crop)
 
-        self.ema_chroma: list[list[float]] = [[1.0, 0.96, 0.90] for _ in range(self.num_zones)]
+        # Neutral warm-white initial chromaticity (never biases red on startup)
+        self.ema_chroma: list[list[float]] = [[0.96, 0.96, 0.94] for _ in range(self.num_zones)]
         self.ema_bri: list[float] = [38.0 for _ in range(self.num_zones)]
         self.zone_floor: list[float] = [38.0 for _ in range(self.num_zones)]
         self.was_screen_black: bool = False
         self.shared_black_floor: float = 36.0
         self.zone_depth_mix: list[float] = [0.0 for _ in range(self.num_zones)]
+        self.active_edge_step: list[int] = [0 for _ in range(self.num_zones)]
         self.prev_edge_rgb: list[list[float]] = [[0.0, 0.0, 0.0] for _ in range(self.num_zones)]
         self.cached_inner_rgb: list[tuple[int, int, int]] = [(0, 0, 0) for _ in range(self.num_zones)]
         self.sent_rgb: list[tuple[int, int, int]] = [(0, 0, 0) for _ in range(self.num_zones)]
@@ -381,13 +575,25 @@ class RPMLightEngine:
             "sky": [0.0, 0.0, 0.0],
             "sky_left": [0.0, 0.0, 0.0],
             "sky_right": [0.0, 0.0, 0.0],
+            "far_left": [0.0, 0.0, 0.0],
         }
-        self.scene_class: str = "auto"  # "auto" | "drama" | "music_video" (Coral TPU / classifier hook)
+        self.scene_class: str = "auto"  # "auto" | "drama" | "music_video"
         self._frame_idx = 0
         self._frames_since_last_cut = 999
 
+    def set_slider_pct(self, slider_pct: int) -> SliderCurveParams:
+        """Apply the single-slider 1..100% curve to this engine instance."""
+        params = apply_slider_curve(slider_pct)
+        self.slider_pct = params.slider_pct
+        self.blinkiness = params.blinkiness
+        self.nl_Master_brightness = params.nl_Master_brightness
+        self.edge_only_mix = params.edge_only_mix
+        self.chroma_bleed_weight = params.chroma_bleed_weight
+        self.hue_max_bri = params.hue_max_bri
+        return params
+
     def process_i420_frame(self, frame: bytes | memoryview) -> ZoneFrameResult:
-        """Process a single cropped I420 frame and return all 52 zone colors + sky state."""
+        """Process a single cropped I420 frame and return all 52 zone colors + sky/wing state."""
         mv = memoryview(frame)
         y_plane = mv[0 : self.y_size]
         u_plane = mv[self.y_size : self.y_size + self.uv_size]
@@ -400,13 +606,65 @@ class RPMLightEngine:
         if self.mode in ("normal", "depth_glow", "super_chill", "extra_color"):
             is_extra = self.mode == "extra_color"
             parity = self._frame_idx & 1
+            probe_mod = self._frame_idx & 3
             raw_colors: list[tuple[int, int, int]] = []
             edge_deltas: list[float] = []
-            for z_i, (_pid, ey_idx, euv_idx, iy_idx, iuv_idx) in enumerate(self.boxes_depth_glow):
+            for z_i, (_pid, edge_steps, iy_idx, iuv_idx) in enumerate(self.boxes_auto_crop):
+                cur_step = self.active_edge_step[z_i]
+                ey_idx, euv_idx = edge_steps[cur_step]
                 er, eg, eb = sample_box_fast(
                     y_plane, u_plane, v_plane, ey_idx, euv_idx, chroma_magnet=True
                 )
                 e_max = max(er, eg, eb)
+
+                # 3-Step Orthogonal Auto-Blackness Deletion:
+                # Re-probe all 3 steps every 4th frame per zone OR immediately when a lit Step 0 goes black
+                if (z_i & 3) == probe_mod or (
+                    cur_step == 0 and e_max < 32 and max(self.prev_edge_rgb[z_i]) >= 24.0
+                ):
+                    s0_idx, s0_uv = edge_steps[0]
+                    r0, g0, b0 = (
+                        (er, eg, eb)
+                        if cur_step == 0
+                        else sample_box_fast(y_plane, u_plane, v_plane, s0_idx, s0_uv, chroma_magnet=True)
+                    )
+                    p0 = max(r0, g0, b0)
+                    if p0 >= 32:
+                        self.active_edge_step[z_i] = 0
+                        er, eg, eb = r0, g0, b0
+                        e_max = p0
+                    else:
+                        s1_idx, s1_uv = edge_steps[1]
+                        r1, g1, b1 = (
+                            (er, eg, eb)
+                            if cur_step == 1
+                            else sample_box_fast(y_plane, u_plane, v_plane, s1_idx, s1_uv, chroma_magnet=True)
+                        )
+                        s2_idx, s2_uv = edge_steps[2]
+                        r2, g2, b2 = (
+                            (er, eg, eb)
+                            if cur_step == 2
+                            else sample_box_fast(y_plane, u_plane, v_plane, s2_idx, s2_uv, chroma_magnet=True)
+                        )
+                        p1 = max(r1, g1, b1)
+                        p2 = max(r2, g2, b2)
+                        if p2 >= 26 and (p1 < 65 or p2 >= p1 * 1.35) and p2 >= p1 + 10:
+                            self.active_edge_step[z_i] = 2
+                            er, eg, eb = r2, g2, b2
+                            e_max = p2
+                        elif p1 >= 26:
+                            self.active_edge_step[z_i] = 1
+                            er, eg, eb = r1, g1, b1
+                            e_max = p1
+                        elif p2 >= p0 + 8:
+                            self.active_edge_step[z_i] = 2
+                            er, eg, eb = r2, g2, b2
+                            e_max = p2
+                        else:
+                            self.active_edge_step[z_i] = 0
+                            er, eg, eb = r0, g0, b0
+                            e_max = p0
+
                 e_min = min(er, eg, eb)
                 e_sat = (e_max - e_min) / e_max if e_max > 0 else 0.0
 
@@ -449,18 +707,21 @@ class RPMLightEngine:
                 inner_has_color = i_max >= 22 and (
                     is_distinct_pip
                     or (i_sat > e_sat + 0.08 and i_sat >= 0.18)
-                    or (e_max < 45 and i_sat >= 0.22)
+                    or (e_max < 65 and i_max >= e_max + 18)
                     or (e_max >= 120 and e_sat < 0.38 and i_sat >= 0.16)
                 )
                 if edge_delta >= 38.0:
                     self.zone_depth_mix[z_i] = max(0.0, self.zone_depth_mix[z_i] - 0.22)
                 elif inner_has_color:
                     if is_bottom_zone:
-                        max_depth = 0.55 if is_extra else 0.36
-                        step_up = 0.009
+                        max_depth = 0.65 if is_extra else (0.52 if e_max < 45 else 0.38)
+                        step_up = 0.035 if e_max < 45 else 0.012
                     elif is_distinct_pip or is_extra:
-                        max_depth = 0.82
-                        step_up = 0.055
+                        max_depth = 0.85
+                        step_up = 0.065
+                    elif e_max < 55:
+                        max_depth = 0.72
+                        step_up = 0.045
                     else:
                         max_depth = 0.58
                         step_up = 0.018
@@ -468,11 +729,11 @@ class RPMLightEngine:
                 else:
                     self.zone_depth_mix[z_i] = max(0.0, self.zone_depth_mix[z_i] - 0.04)
 
-                d_mix = self.zone_depth_mix[z_i]
+                d_mix = self.zone_depth_mix[z_i] * (1.0 - self.edge_only_mix)
                 if d_mix <= 0.005:
                     raw_colors.append((er, eg, eb))
                 else:
-                    i_scale = 0.55 if (e_max < 40 and not is_extra) else 1.0
+                    i_scale = 0.80 if (e_max < 40 and not is_extra) else 1.0
                     raw_colors.append(
                         (
                             int(round((1.0 - d_mix) * er + d_mix * (ir * i_scale))),
@@ -510,6 +771,7 @@ class RPMLightEngine:
         else:
             self.was_screen_black = False
             self.shared_black_floor = 36.0
+            resting_min = 24.0
             for i in range(num_zones):
                 local_5_mean = sum(raw_peaks[(i + k) % num_zones] for k in range(-2, 3)) / 5.0
                 local_13_mean = sum(raw_peaks[(i + k) % num_zones] for k in range(-6, 7)) / 13.0
@@ -519,10 +781,10 @@ class RPMLightEngine:
                     if raw_peaks[i] >= 34.0 or edge_deltas[i] >= 42.0 or local_13_mean >= 32.0:
                         self.zone_floor[i] = midpoint_floor
                     else:
-                        self.zone_floor[i] = max(14.0, self.zone_floor[i] - 0.14)
+                        self.zone_floor[i] = max(resting_min, self.zone_floor[i] - 0.10)
                 else:
                     if raw_peaks[i] < 9.0 and local_5_mean < 11.0 and edge_deltas[i] < 16.0:
-                        self.zone_floor[i] = max(14.0, midpoint_floor - 0.6)
+                        self.zone_floor[i] = max(resting_min, midpoint_floor - 0.6)
                     else:
                         self.zone_floor[i] = midpoint_floor
 
@@ -558,8 +820,6 @@ class RPMLightEngine:
         mean_target_bri = sum(target_bris) / num_zones
         mean_ema_bri = sum(self.ema_bri) / num_zones
         raw_scene_cut = b_norm >= 0.25 and cut_bri_zones >= 22 and abs(mean_target_bri - mean_ema_bri) >= 28.0
-        # Shot-Reverse-Shot Drama Protection: if cuts repeat within ~5s (90 frames), dampen brightness snap
-        # unless scene_class is explicitly "music_video"
         is_dialogue_ping_pong = (
             self.scene_class == "drama"
             or (self.scene_class == "auto" and self._frames_since_last_cut < 90)
@@ -571,9 +831,10 @@ class RPMLightEngine:
         is_scene_cut = raw_scene_cut and not is_dialogue_ping_pong
         nl_trans = 0 if is_scene_cut else (2 if b_norm < 0.30 else 1)
 
-        uni_r = sum(c[0] for c in self.ema_chroma) / num_zones
-        uni_g = sum(c[1] for c in self.ema_chroma) / num_zones
-        uni_b = sum(c[2] for c in self.ema_chroma) / num_zones
+        # Anti-Virus Neutral Baseline: never let a single colored spot infect all dark zones
+        uni_r = 0.96
+        uni_g = 0.96
+        uni_b = 0.94
 
         for i in range(num_zones):
             prev_c = raw_colors[(i - 1) % num_zones]
@@ -588,7 +849,7 @@ class RPMLightEngine:
             s_min = min(sr, sg, sb)
             s_sat = (s_peak - s_min) / s_peak if s_peak > 0.0 else 0.0
 
-            if (not is_screen_black) and s_peak >= 4.0:
+            if (not is_screen_black) and s_peak >= 12.0:
                 tr = sr / s_peak
                 tg = sg / s_peak
                 tb = sb / s_peak
@@ -599,10 +860,11 @@ class RPMLightEngine:
             else:
                 prev_ch = self.ema_chroma[(i - 1) % num_zones]
                 next_ch = self.ema_chroma[(i + 1) % num_zones]
-                tr = 0.55 * uni_r + 0.225 * prev_ch[0] + 0.225 * next_ch[0]
-                tg = 0.55 * uni_g + 0.225 * prev_ch[1] + 0.225 * next_ch[1]
-                tb = 0.55 * uni_b + 0.225 * prev_ch[2] + 0.225 * next_ch[2]
-                c_alpha = 0.22 if is_screen_black else 0.06
+                bleed = self.chroma_bleed_weight
+                tr = (1.0 - bleed) * uni_r + 0.5 * bleed * (prev_ch[0] + next_ch[0])
+                tg = (1.0 - bleed) * uni_g + 0.5 * bleed * (prev_ch[1] + next_ch[1])
+                tb = (1.0 - bleed) * uni_b + 0.5 * bleed * (prev_ch[2] + next_ch[2])
+                c_alpha = 0.22 if is_screen_black else 0.08
 
             cr = self.ema_chroma[i][0] + c_alpha * (tr - self.ema_chroma[i][0])
             cg = self.ema_chroma[i][1] + c_alpha * (tg - self.ema_chroma[i][1])
@@ -644,7 +906,7 @@ class RPMLightEngine:
             ib = max(0, min(255, int(round(self.ema_chroma[i][2] * eff_bri))))
 
             old_r, old_g, old_b = self.sent_rgb[i]
-            deadband = 0 if (is_screen_black or new_bri < 32.0) else (5 if max(old_r, old_g, old_b) < 52 else 3)
+            deadband = 0 if (is_screen_black or new_bri < 42.0) else 2
             if abs(ir - old_r) <= deadband and abs(ig - old_g) <= deadband and abs(ib - old_b) <= deadband:
                 ir, ig, ib = old_r, old_g, old_b
             else:
@@ -654,17 +916,19 @@ class RPMLightEngine:
             hue_alpha = 0.65 if is_scene_cut else (0.04 + 0.35 * (b_norm**1.5))
             lr, lg, lb = sample_box_fast(y_plane, u_plane, v_plane, *self.diamond_boxes["sky_left"])
             rr, rg, rb = sample_box_fast(y_plane, u_plane, v_plane, *self.diamond_boxes["sky_right"])
+            flr, flg, flb = sample_box_fast(y_plane, u_plane, v_plane, *self.diamond_boxes["far_left"])
             for k, (dr, dg, db) in (
                 ("sky_left", (lr, lg, lb)),
                 ("sky_right", (rr, rg, rb)),
                 ("sky", ((lr + rr) >> 1, (lg + rg) >> 1, (lb + rb) >> 1)),
+                ("far_left", (flr, flg, flb)),
             ):
                 d_prev = self.diamond_ema[k]
                 d_prev[0] += hue_alpha * (dr - d_prev[0])
                 d_prev[1] += hue_alpha * (dg - d_prev[1])
                 d_prev[2] += hue_alpha * (db - d_prev[2])
 
-        hue_max_bri = int(round(90 + 95 * b_norm))
+        hue_max_bri = self.hue_max_bri
         sky_rgb, sky_bri = hue_color_and_bri(
             (
                 int(round(self.diamond_ema["sky"][0])),
@@ -689,6 +953,14 @@ class RPMLightEngine:
             ),
             max_bri=hue_max_bri,
         )
+        fl_rgb, fl_bri = hue_color_and_bri(
+            (
+                int(round(self.diamond_ema["far_left"][0])),
+                int(round(self.diamond_ema["far_left"][1])),
+                int(round(self.diamond_ema["far_left"][2])),
+            ),
+            max_bri=max(28, int(round(hue_max_bri * 0.72))),
+        )
         color_diff = abs(l_rgb[0] - r_rgb[0]) + abs(l_rgb[1] - r_rgb[1]) + abs(l_rgb[2] - r_rgb[2])
         if color_diff > 240 and l_bri > 60 and r_bri > 60:
             u_rgb, u_bri = l_rgb, l_bri
@@ -705,4 +977,6 @@ class RPMLightEngine:
             up_bri=u_bri,
             down_rgb=d_rgb,
             down_bri=d_bri,
+            left_rgb=fl_rgb,
+            left_bri=fl_bri,
         )
