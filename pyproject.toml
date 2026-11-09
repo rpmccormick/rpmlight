@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rpmlight"
-version = "0.3.0"
+version = "0.4.0"
 description = "Perceptual Zero-Blink Camera & Screen Ambilight Engine (Decoupled Fast-Hue / Slow-Brightness, Constant-Lumen Wall Matching, Schmitt-Trigger Falling Baseline & Time-Depth Fade-In)"
 readme = "README.md"
 license = "MIT"

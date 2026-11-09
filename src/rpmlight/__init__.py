@@ -20,15 +20,29 @@ from rpmlight.sinks import (
     NanoleafUdpSink,
     WledUdpSink,
 )
+from rpmlight.tpu import (
+    CropCalibrator,
+    CropMargins,
+    TPUaaSBackgroundWorker,
+    TPUSceneCue,
+    estimate_i420_active_bbox_norm,
+    i420_to_ppm,
+    infer_scene_cue,
+    query_gemini_vision_cue,
+)
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
+    "CropCalibrator",
+    "CropMargins",
     "KodiJsonRpcToastSink",
     "MiniMqttPublisher",
     "NanoleafUdpSink",
     "RPMLightEngine",
     "SliderCurveParams",
+    "TPUSceneCue",
+    "TPUaaSBackgroundWorker",
     "WledUdpSink",
     "ZoneFrameResult",
     "__version__",
@@ -39,6 +53,10 @@ __all__ = [
     "build_diamond_boxes",
     "build_sampling_boxes",
     "describe_slider_setting",
+    "estimate_i420_active_bbox_norm",
     "hue_color_and_bri",
+    "i420_to_ppm",
+    "infer_scene_cue",
+    "query_gemini_vision_cue",
     "sample_box_fast",
 ]

@@ -60,6 +60,26 @@ class ZoneFrameResult:
     down_bri: int
     left_rgb: list[int] = field(default_factory=lambda: [255, 195, 145])
     left_bri: int = 32
+    beat_pulse: bool = False
+    energy: float = 0.0
+    scene_class: str = "auto"
+
+    def to_diamond_dict(self, slider_pct: int = 50, lightshow_active: bool = True) -> dict[str, object]:
+        """Build the MQTT diamond + lightshow sync payload for Home Assistant & TPUaaS."""
+        return {
+            "up_rgb": self.up_rgb,
+            "up_bri": self.up_bri,
+            "down_rgb": self.down_rgb,
+            "down_bri": self.down_bri,
+            "left_rgb": self.left_rgb,
+            "left_bri": self.left_bri,
+            "is_scene_cut": self.is_scene_cut,
+            "beat_pulse": self.beat_pulse,
+            "energy": self.energy,
+            "scene_class": self.scene_class,
+            "slider_pct": slider_pct,
+            "lightshow_active": lightshow_active,
+        }
 
 
 @dataclass(frozen=True)
@@ -578,8 +598,21 @@ class RPMLightEngine:
             "far_left": [0.0, 0.0, 0.0],
         }
         self.scene_class: str = "auto"  # "auto" | "drama" | "music_video"
+        self.wing_weights: dict[str, float] = {"west": 1.0, "east": 1.0, "far_left": 1.0}
         self._frame_idx = 0
         self._frames_since_last_cut = 999
+
+    def apply_tpu_cue(self, cue: object) -> None:
+        """Apply a low-rate TPUSceneCue (scene_class & wing_weights) from TPUaaS or Gemini."""
+        s_class = getattr(cue, "scene_class", None)
+        if s_class in ("auto", "drama", "music_video"):
+            self.scene_class = str(s_class)
+        ww = getattr(cue, "wing_weights", None)
+        if isinstance(ww, dict):
+            for k in ("west", "east", "far_left"):
+                if k in ww:
+                    target_w = max(0.50, min(1.50, float(ww[k])))
+                    self.wing_weights[k] = round(0.55 * self.wing_weights[k] + 0.45 * target_w, 3)
 
     def set_slider_pct(self, slider_pct: int) -> SliderCurveParams:
         """Apply the single-slider 1..100% curve to this engine instance."""
@@ -969,6 +1002,23 @@ class RPMLightEngine:
             u_rgb, u_bri = sky_rgb, sky_bri
             d_rgb, d_bri = sky_rgb, sky_bri
 
+        # Apply optional TPU/Gemini horizontal saliency wing weights (defaults to 1.0)
+        u_bri = max(24, min(255, int(round(u_bri * self.wing_weights.get("west", 1.0)))))
+        d_bri = max(24, min(255, int(round(d_bri * self.wing_weights.get("east", 1.0)))))
+        fl_bri = max(24, min(255, int(round(fl_bri * self.wing_weights.get("far_left", 1.0)))))
+
+        mean_edge_delta = sum(edge_deltas) / num_zones if num_zones > 0 else 0.0
+        energy = round(
+            min(
+                1.0,
+                (mean_edge_delta / 65.0) * 0.55
+                + (global_mean_peak / 255.0) * 0.30
+                + (0.25 if is_scene_cut else 0.0),
+            ),
+            3,
+        )
+        beat_pulse = bool(is_scene_cut or (mean_edge_delta >= 28.0 and cut_bri_zones >= 12))
+
         return ZoneFrameResult(
             zones_rgb=list(self.sent_rgb),
             nl_transition_ds=nl_trans,
@@ -979,4 +1029,7 @@ class RPMLightEngine:
             down_bri=d_bri,
             left_rgb=fl_rgb,
             left_bri=fl_bri,
+            beat_pulse=beat_pulse,
+            energy=energy,
+            scene_class=self.scene_class,
         )

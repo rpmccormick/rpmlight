@@ -14,6 +14,14 @@ from rpmlight.engine import (
     sample_box_fast,
 )
 from rpmlight.sinks import NanoleafUdpSink, WledUdpSink
+from rpmlight.tpu import (
+    CropCalibrator,
+    CropMargins,
+    TPUaaSBackgroundWorker,
+    estimate_i420_active_bbox_norm,
+    i420_to_ppm,
+    infer_scene_cue,
+)
 
 
 def _make_i420_frame(
@@ -202,3 +210,72 @@ def test_sinks_packet_encoding() -> None:
     wled_pkt = wled.encode_drgb_packet(zones)
     assert wled_pkt[:2] == b"\x02\x02"
     assert len(wled_pkt) == 2 + 3 * 3
+
+
+def test_tpuaas_i420_to_ppm_and_scene_cue_inference() -> None:
+    frame = _make_i420_frame(y_val=120, u_val=128, v_val=128)
+    ppm = i420_to_ppm(frame, step=2)
+    assert ppm.startswith(b"P6\n160 88\n255\n")
+    assert len(ppm) == len(b"P6\n160 88\n255\n") + 160 * 88 * 3
+
+    # 1. Close-up dialogue (1 large person bbox >= 18% of screen) -> "drama"
+    cue_drama = infer_scene_cue(
+        {
+            "detections": [
+                {"label": "person", "score": 0.88, "bbox_norm": [0.25, 0.15, 0.75, 0.85]}
+            ],
+            "tpu_ms": 5.94,
+            "sram_cache_hit": True,
+        }
+    )
+    assert cue_drama.scene_class == "drama"
+    assert cue_drama.sram_cache_hit is True
+    assert abs(cue_drama.focal_x - 0.5) < 0.05
+
+    # 2. Sports / fast action on left side -> "music_video" + left focal_x bias
+    cue_action = infer_scene_cue(
+        {
+            "detections": [
+                {"label": "person", "score": 0.82, "bbox_norm": [0.05, 0.30, 0.25, 0.70]},
+                {"label": "sports ball", "score": 0.75, "bbox_norm": [0.10, 0.40, 0.18, 0.52]},
+            ],
+            "tpu_ms": 5.94,
+            "sram_cache_hit": True,
+        }
+    )
+    assert cue_action.scene_class == "music_video"
+    assert cue_action.focal_x < 0.30
+    assert cue_action.wing_weights["west"] > cue_action.wing_weights["east"]
+
+    # 3. Engine applies TPU cue (scene_class + wing_weights) and emits lightshow diamond dict
+    engine = RPMLightEngine(slider_pct=50)
+    engine.apply_tpu_cue(cue_action)
+    assert engine.scene_class == "music_video"
+    assert engine.wing_weights["west"] > engine.wing_weights["east"]
+    res = engine.process_i420_frame(frame)
+    diamond = res.to_diamond_dict(slider_pct=50)
+    assert diamond["scene_class"] == "music_video"
+    assert "beat_pulse" in diamond and "energy" in diamond
+
+    # 4. Optional Auto-Crop preserves hardcoded crop and reverts cleanly
+    hardcoded = CropMargins(top=328, bottom=216, left=608, right=352)
+    cal = CropCalibrator(hardcoded, auto_crop_enabled=False)
+    assert cal.current_crop == hardcoded
+    auto_applied = cal.apply_auto_crop_bbox((0.25, 0.25, 0.75, 0.75))
+    assert auto_applied != hardcoded
+    assert cal.saved_crop == hardcoded
+    reverted = cal.revert_crop()
+    assert reverted == hardcoded
+
+    # 5. Offline pure-Python I420 active content bbox estimation
+    letterbox_frame = _make_i420_frame(y_val=4, u_val=128, v_val=128)
+    _paint_i420_rect(letterbox_frame, 32, 28, 288, 148, y_val=120, u_val=128, v_val=128)
+    bbox = estimate_i420_active_bbox_norm(letterbox_frame)
+    assert 0.08 <= bbox[0] <= 0.15
+    assert 0.12 <= bbox[1] <= 0.22
+    assert 0.85 <= bbox[2] <= 0.94
+    assert 0.80 <= bbox[3] <= 0.90
+
+    # 6. TPUaaSBackgroundWorker is disabled by default when no URL is configured
+    worker = TPUaaSBackgroundWorker(base_url="")
+    assert worker.enabled is False
