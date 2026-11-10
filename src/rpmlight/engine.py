@@ -705,10 +705,21 @@ class RPMLightEngine:
         }
         self.scene_class: str = "auto"  # "auto" | "drama" | "music_video"
         self.wing_weights: dict[str, float] = {"west": 1.0, "east": 1.0, "far_left": 1.0}
+        self.kodi_art_zones: list[tuple[int, int, int]] | None = None
+        self.kodi_art_sky: tuple[int, int, int] | None = None
         self._frame_idx = 0
         self._frames_since_last_cut = 999
         self.pause_steady_frames: int = 0
         self.is_video_paused: bool = False
+
+    def set_kodi_art_correction(
+        self,
+        zones_rgb: list[tuple[int, int, int]] | None,
+        sky_rgb: tuple[int, int, int] | None = None,
+    ) -> None:
+        """Provide secondary digital artwork ground-truth correction for Kodi menu/backdrop screens."""
+        self.kodi_art_zones = zones_rgb
+        self.kodi_art_sky = sky_rgb
 
     def apply_tpu_cue(self, cue: object) -> None:
         """Apply a low-rate TPUSceneCue (scene_class & wing_weights) from TPUaaS or Gemini."""
@@ -872,7 +883,7 @@ class RPMLightEngine:
 
                 d_mix = self.zone_depth_mix[z_i] * (1.0 - self.edge_only_mix)
                 if d_mix <= 0.005:
-                    raw_colors.append((er, eg, eb))
+                    cam_r, cam_g, cam_b = er, eg, eb
                 else:
                     if is_bottom_zone and e_max < 38 and not is_extra:
                         i_scale = 0.52
@@ -880,13 +891,26 @@ class RPMLightEngine:
                         i_scale = 0.80
                     else:
                         i_scale = 1.0
-                    raw_colors.append(
-                        (
-                            int(round((1.0 - d_mix) * er + d_mix * (ir * i_scale))),
-                            int(round((1.0 - d_mix) * eg + d_mix * (ig * i_scale))),
-                            int(round((1.0 - d_mix) * eb + d_mix * (ib * i_scale))),
-                        )
-                    )
+                    cam_r = int(round((1.0 - d_mix) * er + d_mix * (ir * i_scale)))
+                    cam_g = int(round((1.0 - d_mix) * eg + d_mix * (ig * i_scale)))
+                    cam_b = int(round((1.0 - d_mix) * eb + d_mix * (ib * i_scale)))
+
+                if self.kodi_art_zones is not None and self.slider_pct <= 82 and edge_delta < 38.0:
+                    kr, kg, kb = self.kodi_art_zones[z_i]
+                    cam_max = max(cam_r, cam_g, cam_b)
+                    cam_sat = (cam_max - min(cam_r, cam_g, cam_b)) / cam_max if cam_max > 0 else 0.0
+                    s_scale = 1.0 - self.edge_only_mix
+                    if cam_max < 44 or cam_sat < 0.18:
+                        k_w = 0.72 * s_scale
+                    elif 38 <= z_i <= 41:
+                        k_w = 0.65 * s_scale
+                    else:
+                        k_w = 0.26 * s_scale
+                    cam_r = int(round((1.0 - k_w) * cam_r + k_w * kr))
+                    cam_g = int(round((1.0 - k_w) * cam_g + k_w * kg))
+                    cam_b = int(round((1.0 - k_w) * cam_b + k_w * kb))
+
+                raw_colors.append((cam_r, cam_g, cam_b))
         else:
             edge_deltas = [0.0 for _ in range(num_zones)]
             raw_colors = [
