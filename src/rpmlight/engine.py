@@ -565,9 +565,10 @@ def sample_box_fast(
     if c < 3:
         c = 3
 
-    # Brown / Tan / Skin / Wood protection:
+    # Brown / Tan / Skin / Wood vs. Warm Orange vs. Vivid Red protection:
     # RGB LEDs have no "brown" diode and turn brown/tan/wood blood-red unless G & B are preserved.
-    is_vivid_red = ym >= 48 and vm >= 24 and um >= -5
+    is_vivid_red = ym >= 48 and vm >= 24 and (um >= -10 or vm > (-um) * 2.2)
+    is_warm_orange = (not is_vivid_red) and ym >= 50 and vm >= 20 and um <= -12
     if vm > 0 and not is_vivid_red:
         r = (298 * c + 340 * vm + 128) >> 8
         g = (298 * c - 100 * um - 150 * vm + 128) >> 8
@@ -579,16 +580,18 @@ def sample_box_fast(
     g = 0 if g < 0 else (255 if g > 255 else g)
     b = 0 if b < 0 else (255 if b > 255 else b)
 
-    # Warm golden-tan floor for brown/wood/skin/warm-amber tones
-    if r > g and vm > 0 and not is_vivid_red:
-        min_g = int(round(r * 0.78))
-        min_b = int(round(r * 0.45))
+    # Warm golden-orange vs. brown/wood/skin floor
+    if is_warm_orange:
+        g = min(255, max(g, int(round(r * 0.68))))
+        b = min(b, int(round(r * 0.25)))
+    elif r > g and vm > 0 and not is_vivid_red:
+        min_g = int(round(r * 0.72))
+        min_b = int(round(r * 0.42))
         if g < min_g:
             g = min_g
         if b < min_b:
             b = min_b
-
-    if r >= 125 and g >= 38 and b >= 26 and r > g * 1.25 and b <= g * 1.35:
+    elif r >= 125 and g >= 38 and b >= 26 and r > g * 1.25 and b <= g * 1.35:
         b = min(255, max(b, int(round(g * 1.18))))
 
     rf = r / 255.0
