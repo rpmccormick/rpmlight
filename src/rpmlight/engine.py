@@ -1009,6 +1009,8 @@ class RPMLightEngine:
                 tr = sr / s_peak
                 tg = sg / s_peak
                 tb = sb / s_peak
+                if s_peak < 28.0 and tr > tg + 0.04:
+                    tr = tg + 0.04
                 if s_sat >= 0.22:
                     c_alpha = 0.24 + 0.70 * (b_norm**0.85)
                 else:
