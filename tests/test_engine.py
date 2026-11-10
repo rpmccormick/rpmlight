@@ -279,3 +279,42 @@ def test_tpuaas_i420_to_ppm_and_scene_cue_inference() -> None:
     # 6. TPUaaSBackgroundWorker is disabled by default when no URL is configured
     worker = TPUaaSBackgroundWorker(base_url="")
     assert worker.enabled is False
+
+
+def test_pause_freeze_gate_and_sub_bass_beat_detector() -> None:
+    import math
+    import struct
+    from rpmlight.engine import SubBassBeatDetector, suppress_non_dominant
+
+    # 1. Dominant-channel power-curve suppression scales cleanly from 0.0 (50% natural) to 1.0 (100% neon/red)
+    r0, g0, b0 = suppress_non_dominant(250.0, 120.0, 80.0, strength=0.0)
+    assert (r0, g0, b0) == (250.0, 120.0, 80.0)
+    r1, g1, b1 = suppress_non_dominant(250.0, 120.0, 80.0, strength=1.0)
+    assert r1 == 250.0 and g1 < 35.0 and b1 < 15.0
+
+    # 2. Pause freeze gate locks after 10 steady frames and unlocks on >4% change
+    engine = RPMLightEngine(slider_pct=50)
+    frame_a = _make_i420_frame(y_val=100, u_val=100, v_val=200)
+    for _ in range(15):
+        res = engine.process_i420_frame(frame_a)
+    assert res.is_video_paused is True
+    locked_rgb = list(res.zones_rgb)
+    res_still = engine.process_i420_frame(frame_a)
+    assert res_still.zones_rgb == locked_rgb
+
+    frame_b = _make_i420_frame(y_val=120, u_val=210, v_val=90)
+    res_play = engine.process_i420_frame(frame_b)
+    assert res_play.is_video_paused is False
+
+    # 3. SubBassBeatDetector detects a 65 Hz sub-bass kick
+    det = SubBassBeatDetector()
+    quiet_pcm = struct.pack("<800h", *([10] * 800))
+    for _ in range(5):
+        det.process_pcm_s16le(quiet_pcm)
+    kick_samples = [int(4500 * math.sin(2.0 * math.pi * 65.0 * i / 16000.0)) for i in range(800)]
+    kick_pcm = struct.pack("<800h", *kick_samples)
+    pulse, strength, energy = det.process_pcm_s16le(kick_pcm)
+    assert pulse is True
+    assert strength >= 0.35
+    assert energy > 0.0
+

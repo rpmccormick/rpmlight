@@ -41,10 +41,110 @@ conventional camera/screen Ambilights:
 from __future__ import annotations
 
 import colorsys
+import math
+import struct
 from dataclasses import dataclass, field
 
 DEFAULT_CROP_W = 320
 DEFAULT_CROP_H = 176
+
+
+def suppress_non_dominant(
+    r: float, g: float, b: float, strength: float = 1.0
+) -> tuple[float, float, float]:
+    """Dominant-channel power-curve suppression scaled by strength (0.0 at 50% natural, 1.0 at 100% neon
+    or pure crimson scenes) so Green diodes (~3x brighter to human eye) never wash out Red, Magenta, or Blue."""
+    if strength <= 0.01:
+        return (r, g, b)
+    orig_r, orig_g, orig_b = r, g, b
+    if r > g * 1.35 and r > b * 1.35 and r > 1.0:
+        g = g * ((g / r) ** 2.0)
+        b = b * ((b / r) ** 2.0)
+    elif r > g * 1.45 and b > g * 1.25 and r > 1.0:
+        g = g * ((g / r) ** 2.5)
+    elif b > r * 1.25 and b > g * 1.15 and b > 1.0:
+        r = r * ((r / b) ** 2.0)
+        g = g * ((g / b) ** 1.6)
+    return (
+        orig_r + strength * (r - orig_r),
+        orig_g + strength * (g - orig_g),
+        orig_b + strength * (b - orig_b),
+    )
+
+
+class SubBassBeatDetector:
+    """Pure-Python 3-Band Goertzel Sub-Bass (40-140 Hz) Spectral Flux Beat Detector for 16 kHz S16_LE PCM."""
+
+    def __init__(self, sample_rate_hz: int = 16000, decimate: int = 4) -> None:
+        self.sample_rate_hz = sample_rate_hz
+        self.decimate = decimate
+        fs_d = sample_rate_hz / float(decimate)
+        self._sub_coeffs = [2.0 * math.cos(2.0 * math.pi * f / fs_d) for f in (45.0, 65.0, 85.0, 105.0, 130.0)]
+        self._mid_coeffs = [2.0 * math.cos(2.0 * math.pi * f / fs_d) for f in (190.0, 270.0)]
+        self._hi_coeffs = [2.0 * math.cos(2.0 * math.pi * f / fs_d) for f in (1300.0, 1700.0)]
+        self.sub_fast = 1.0
+        self.sub_slow = 1.0
+        self.rms_slow = 180.0
+        self.beat_pulse = False
+        self.beat_strength = 0.0
+        self.audio_energy = 0.0
+        self._cooldown_chunks = 0
+
+    @staticmethod
+    def _goertzel_power(samples: list[float], coeff: float) -> float:
+        s1 = 0.0
+        s2 = 0.0
+        for x in samples:
+            s0 = x + coeff * s1 - s2
+            s2 = s1
+            s1 = s0
+        return max(0.0, s1 * s1 + s2 * s2 - coeff * s1 * s2)
+
+    def process_pcm_s16le(self, pcm_bytes: bytes | memoryview) -> tuple[bool, float, float]:
+        """Process a 50ms chunk (1600 bytes / 800 samples at 16 kHz) and return (beat_pulse, beat_strength, energy)."""
+        n_samples = len(pcm_bytes) // 2
+        if n_samples < self.decimate * 8:
+            return (False, 0.0, 0.0)
+        samples_all = struct.unpack(f"<{n_samples}h", pcm_bytes[: n_samples * 2])
+        step = self.decimate
+        dec = [
+            sum(samples_all[idx : idx + step]) / float(step)
+            for idx in range(0, n_samples - step + 1, step)
+        ]
+        n_dec = len(dec)
+        mean_val = sum(dec) / float(n_dec)
+        dec_zero = [x - mean_val for x in dec]
+        rms = math.sqrt(sum(x * x for x in dec_zero) / float(n_dec))
+        self.rms_slow = 0.96 * self.rms_slow + 0.04 * max(120.0, rms)
+
+        norm = float(n_dec * n_dec)
+        sub_pwr = max(self._goertzel_power(dec_zero, c) for c in self._sub_coeffs) / norm
+        mid_pwr = max(self._goertzel_power(dec_zero, c) for c in self._mid_coeffs) / norm
+        hi_pwr = max(self._goertzel_power(dec_zero, c) for c in self._hi_coeffs) / norm
+
+        bass_combined = sub_pwr + 0.35 * mid_pwr + 0.10 * hi_pwr
+        self.sub_fast = 0.55 * self.sub_fast + 0.45 * bass_combined
+        self.sub_slow = 0.93 * self.sub_slow + 0.07 * max(25.0, bass_combined)
+        flux_ratio = self.sub_fast / max(25.0, self.sub_slow)
+        self.audio_energy = round(min(1.0, max(0.0, (rms - 130.0) / 1400.0)), 3)
+
+        if self._cooldown_chunks > 0:
+            self._cooldown_chunks -= 1
+
+        is_kick = (
+            rms >= max(240.0, self.rms_slow * 1.18)
+            and sub_pwr >= 45.0
+            and flux_ratio >= 1.65
+            and self._cooldown_chunks == 0
+        )
+        if is_kick:
+            self._cooldown_chunks = 3
+            self.beat_pulse = True
+            self.beat_strength = round(min(1.0, max(0.35, (flux_ratio - 1.35) / 1.85)), 3)
+        else:
+            self.beat_pulse = False
+            self.beat_strength = round(max(0.0, self.beat_strength * 0.72), 3)
+        return (self.beat_pulse, self.beat_strength, self.audio_energy)
 
 
 @dataclass(frozen=True)
@@ -63,6 +163,7 @@ class ZoneFrameResult:
     beat_pulse: bool = False
     energy: float = 0.0
     scene_class: str = "auto"
+    is_video_paused: bool = False
 
     def to_diamond_dict(self, slider_pct: int = 50, lightshow_active: bool = True) -> dict[str, object]:
         """Build the MQTT diamond + lightshow sync payload for Home Assistant & TPUaaS."""
@@ -601,6 +702,8 @@ class RPMLightEngine:
         self.wing_weights: dict[str, float] = {"west": 1.0, "east": 1.0, "far_left": 1.0}
         self._frame_idx = 0
         self._frames_since_last_cut = 999
+        self.pause_steady_frames: int = 0
+        self.is_video_paused: bool = False
 
     def apply_tpu_cue(self, cue: object) -> None:
         """Apply a low-rate TPUSceneCue (scene_class & wing_weights) from TPUaaS or Gemini."""
@@ -720,9 +823,9 @@ class RPMLightEngine:
                 pe = self.prev_edge_rgb[z_i]
                 edge_delta = abs(er - pe[0]) + abs(eg - pe[1]) + abs(eb - pe[2])
                 edge_deltas.append(edge_delta)
-                pe[0] += 0.35 * (er - pe[0])
-                pe[1] += 0.35 * (eg - pe[1])
-                pe[2] += 0.35 * (eb - pe[2])
+                pe[0] += 0.55 * (er - pe[0])
+                pe[1] += 0.55 * (eg - pe[1])
+                pe[2] += 0.55 * (eb - pe[2])
 
                 e_unit_r = er / e_max if e_max > 0 else 0.0
                 e_unit_g = eg / e_max if e_max > 0 else 0.0
@@ -790,6 +893,22 @@ class RPMLightEngine:
         is_screen_black = global_mean_peak < 11.0 and max_raw_peak < 32.0
         midpoint_floor = 38.0 if global_mean_peak >= 18.0 else max(26.0, global_mean_peak * 1.45)
 
+        # Pause / Still-Frame Freeze Gate:
+        # If average change across all 52 zones is < 2.5% for 10 consecutive frames (~0.5s),
+        # lock the LED output buffer dead-still until a frame changes by > 4.0%!
+        mean_delta_pct = (sum(edge_deltas) / (num_zones * 765.0)) * 100.0 if num_zones > 0 else 0.0
+        max_delta_pct = (max(edge_deltas) / 765.0) * 100.0 if edge_deltas else 0.0
+        if is_screen_black:
+            self.pause_steady_frames = 0
+            self.is_video_paused = False
+        elif mean_delta_pct > 4.0 or max_delta_pct > 9.0:
+            self.pause_steady_frames = 0
+            self.is_video_paused = False
+        elif mean_delta_pct < 2.5 and max_delta_pct < 6.5:
+            self.pause_steady_frames += 1
+            if self.pause_steady_frames >= 10:
+                self.is_video_paused = True
+
         if is_screen_black:
             if not self.was_screen_black:
                 self.was_screen_black = True
@@ -801,6 +920,8 @@ class RPMLightEngine:
                 for i in range(num_zones):
                     self.zone_floor[i] = self.shared_black_floor
             target_bris = [self.shared_black_floor for _ in range(num_zones)]
+        elif self.is_video_paused:
+            target_bris = [self.ema_bri[i] for i in range(num_zones)]
         else:
             self.was_screen_black = False
             self.shared_black_floor = 36.0
@@ -870,6 +991,8 @@ class RPMLightEngine:
         uni_b = 0.94
 
         for i in range(num_zones):
+            if self.is_video_paused and not is_screen_black:
+                continue
             prev_c = raw_colors[(i - 1) % num_zones]
             curr_c = raw_colors[i]
             next_c = raw_colors[(i + 1) % num_zones]
@@ -1032,4 +1155,5 @@ class RPMLightEngine:
             beat_pulse=beat_pulse,
             energy=energy,
             scene_class=self.scene_class,
+            is_video_paused=self.is_video_paused,
         )

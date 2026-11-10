@@ -1,14 +1,14 @@
-# RPMLight (`rpmlight`) — v0.4.0
+# RPMLight (`rpmlight`) — v0.5.0
 
-**Perceptual Zero-Blink Multi-Zone Camera & Screen Ambilight Engine for Nanoleaf 4D, WLED, and Home Assistant Hue Sky / Wing Lights, with Optional Coral EdgeTPU (`TPUaaS`) & Gemini Vision Support.**
+**Perceptual Zero-Blink Multi-Zone Camera & Screen Ambilight Engine for Nanoleaf 4D, WLED, and Home Assistant Hue Sky / Wing Lights, with Optional Coral EdgeTPU (`TPUaaS`), Gemini Vision, and Sub-Bass Audio Beat Sync.**
 
-Traditional camera and screen-capture Ambilights (Hyperion, SignalRGB, Prismatik, stock Nanoleaf 4D) treat every zone as a raw RGB pixel mirror. In real living rooms, that causes **constant distracting brightness strobing**, **black-bar starvation on `2.35:1` widescreen movies & Kodi poster menus**, **blood-red skin/wood/shadow contamination**, and **flickering when actors walk across the frame**.
+Traditional camera and screen-capture Ambilights (Hyperion, SignalRGB, Prismatik, stock Nanoleaf 4D) treat every zone as a raw RGB pixel mirror. In real living rooms, that causes **constant distracting brightness strobing**, **black-bar starvation on `2.35:1` widescreen movies & Kodi poster menus**, **blood-red skin/wood/shadow contamination**, **yellow/whitewashed reds**, and **shadow flickering when video is paused**.
 
 **RPMLight** solves these problems using a human-vision-inspired perceptual pipeline designed to run at **15–20 FPS in pure Python with <10% CPU usage** on embedded Linux / Android wall switches (such as the Brilliant Smart Home Control) or Raspberry Pi.
 
 ---
 
-## Key Innovations (v0.4.0)
+## Key Innovations (v0.5.0)
 
 ### 1. 3-Step Orthogonal Auto-Blackness Deletion (`2.35:1` Letterbox, Kodi Rows & `4:3` Pillarbox)
 - Each of the 52 perimeter zones precomputes **3 orthogonal inward march steps**:
@@ -33,12 +33,14 @@ Traditional camera and screen-capture Ambilights (Hyperion, SignalRGB, Prismatik
 - **Symmetric Luma Weighting**: Inside `sample_box_fast()`, per-pixel weights use unbiased luma (`luma_f = yv - 8`) before averaging `Y, U, V`, so `+v` (red) and `-v` (cyan/green) Bayer demosaicing fringes along horizontal `2.35:1` letterbox boundaries cancel out to zero instead of biasing toward red.
 - **Brown / Tan / Skin / Wood Protection**: RGB LEDs have no "brown" diode and turn dark wood, hair, leather, and skin blood-red unless green and blue are preserved. RPMLight distinguishes true vivid crimson (`ym >= 48, vm >= 24, um >= -5`) from warm brown/tan/skin tones and enforces a warm golden-amber floor (`g >= 0.72 * r, b >= 0.42 * r`).
 
-### 4. Single-Slider Perceptual Curve (`1%–100%`) & Direct TV OSD Toasts
+### 4. Single-Slider Perceptual Curve (`1%–100%`), Natural `50%` vs. Neon `100%`, Pause Freeze Gate & Sub-Bass Beat Detector
 - A single dimmer slider (`1%–100%`) controls the entire perceptual engine via `apply_slider_curve(pct)`:
   - **`1%–25%` (Night Glow)**: Dimmer hardware cap (`12%–65%`), ultra-slow brightness glide, wide neighbor blending.
-  - **`25%–50%` (Smooth Blend -> Balanced Sweet Spot)**: Smooth transitions with full Auto-Blackness Deletion.
-  - **`50%–75%` (Crisp & Fast)**: Tighter outer-edge tracking and faster action response.
-  - **`75%–100%` (Deep Vivid Rainbow)**: Full brightness, maximum speed, and deep inner-screen color reach.
+  - **`25%–50%` (Smooth Blend -> Balanced Sweet Spot)**: Natural cinema colors with S-curve saturation, Dominant-Hue dark borrowing (`12–15%` deep ambient floor in Smooth Mode, never white/yellow), and full Auto-Blackness Deletion.
+  - **`50%–75%` (Crisp & Fast)**: Tighter outer-edge tracking (dark zones go genuinely black) and faster action response.
+  - **`75%–100%` (Deep Vivid Neon Rainbow)**: Ramps up Dominant-Channel Power-Curve Suppression (`suppress_non_dominant`: `G = G * (G/R)^2`, `B = B * (B/R)^2`) for a full neon lightshow look while keeping pure crimson red (`100%` red scenes) blood-red at all slider positions.
+- **Pause / Still-Frame Freeze Gate (`is_video_paused`)**: Locks the 52-zone LED output buffer 100% dead-still when average frame-to-frame delta across all 52 zones is `< 2.5%` for `10` consecutive frames (`~0.5s`), eliminating shadow noise flicker on paused video, and unlocks on the very first frame with `> 4.0%` change.
+- **3-Band Sub-Bass (`40–140 Hz`) Goertzel Beat Detector (`SubBassBeatDetector`)**: Pure-Python 4:1 decimated (`16 kHz` -> `4 kHz`) Goertzel spectral flux detector that tracks real speaker sub-bass kicks (`45–130 Hz`) from a non-exclusive ALSA `dsnoop` microphone tap to drive `beat_pulse` and `beat_strength`.
 - Includes `KodiJsonRpcToastSink` (`GUI.ShowNotification` over port `8080`) and Home Assistant `status_toast` publishing so adjusting the slider displays a short explanation right on the TV screen without switching HDMI inputs.
 
 ---

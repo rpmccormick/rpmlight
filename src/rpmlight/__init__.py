@@ -3,6 +3,7 @@
 from rpmlight.engine import (
     RPMLightEngine,
     SliderCurveParams,
+    SubBassBeatDetector,
     ZoneFrameResult,
     apply_slider_curve,
     build_52_panel_coords,
@@ -13,6 +14,7 @@ from rpmlight.engine import (
     describe_slider_setting,
     hue_color_and_bri,
     sample_box_fast,
+    suppress_non_dominant,
 )
 from rpmlight.sinks import (
     KodiJsonRpcToastSink,
@@ -31,7 +33,7 @@ from rpmlight.tpu import (
     query_gemini_vision_cue,
 )
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 __all__ = [
     "CropCalibrator",
@@ -41,6 +43,7 @@ __all__ = [
     "NanoleafUdpSink",
     "RPMLightEngine",
     "SliderCurveParams",
+    "SubBassBeatDetector",
     "TPUSceneCue",
     "TPUaaSBackgroundWorker",
     "WledUdpSink",
@@ -59,4 +62,5 @@ __all__ = [
     "infer_scene_cue",
     "query_gemini_vision_cue",
     "sample_box_fast",
+    "suppress_non_dominant",
 ]
