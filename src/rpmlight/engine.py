@@ -579,10 +579,10 @@ def sample_box_fast(
     g = 0 if g < 0 else (255 if g > 255 else g)
     b = 0 if b < 0 else (255 if b > 255 else b)
 
-    # Warm golden-tan floor for brown/wood/skin tones
+    # Warm golden-tan floor for brown/wood/skin/warm-amber tones
     if r > g and vm > 0 and not is_vivid_red:
-        min_g = int(round(r * 0.72))
-        min_b = int(round(r * 0.42))
+        min_g = int(round(r * 0.78))
+        min_b = int(round(r * 0.45))
         if g < min_g:
             g = min_g
         if b < min_b:
@@ -597,9 +597,11 @@ def sample_box_fast(
 
     h, s, v = colorsys.rgb_to_hsv(rf, gf, bf)
     if s > 0.14:
-        if h < 0.09 or h > 0.88:
-            # Never over-boost weak red/brown hues into blood red
+        if h < 0.13 or h > 0.88:
+            # Never over-boost weak red/brown/amber hues into blood red
             sat_boost = 0.85 if s < 0.68 else 1.12
+        elif 0.40 <= h <= 0.56:
+            sat_boost = 1.85
         else:
             sat_boost = 1.32
         s = min(1.0, 0.14 + (s - 0.14) * sat_boost)
@@ -869,7 +871,12 @@ class RPMLightEngine:
                 if d_mix <= 0.005:
                     raw_colors.append((er, eg, eb))
                 else:
-                    i_scale = 0.80 if (e_max < 40 and not is_extra) else 1.0
+                    if is_bottom_zone and e_max < 38 and not is_extra:
+                        i_scale = 0.52
+                    elif e_max < 40 and not is_extra:
+                        i_scale = 0.80
+                    else:
+                        i_scale = 1.0
                     raw_colors.append(
                         (
                             int(round((1.0 - d_mix) * er + d_mix * (ir * i_scale))),
