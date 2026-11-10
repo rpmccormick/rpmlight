@@ -486,9 +486,9 @@ def sample_box_fast(
         if yv >= 85 and -8 <= u <= 24 and -24 <= v <= 4 and (u * u + v * v) < 750:
             u = int(u * 0.25)
             v = int(v * 0.25)
-        elif 10 <= yv < 52 and u >= 4 and v <= -2 and (u - v) >= 6:
-            u = int(u * 1.65)
-            v = int(v * 1.35)
+        elif 16 <= yv < 42 and u >= 9 and v <= -5:
+            u = int(u * 1.35)
+            v = int(v * 1.20)
         uv_sq = u * u + v * v
 
         # Symmetric per-pixel luma weighting: never bias weight by +v before averaging,
@@ -497,10 +497,6 @@ def sample_box_fast(
         luma_f = yv - 8
         if luma_f <= 0:
             w = 1
-        elif ignore_bright_matte and yv >= 42 and uv_sq < 85:
-            w = 1
-        elif chroma_magnet and yv >= 10 and u >= 4 and v <= -2 and (u - v) >= 6:
-            w = 12 + u * 2
         else:
             if luma_f > 72:
                 luma_f = 72
