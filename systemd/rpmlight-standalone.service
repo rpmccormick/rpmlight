@@ -1,0 +1,14 @@
+[Unit]
+Description=RPMLight Standalone Linux 52-Zone Ambilight Service (V4L2 / RTSP / FFmpeg)
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/rpmlight
+ExecStart=/usr/bin/env rpmlight --source v4l2 --device /dev/video0
+Restart=always
+RestartSec=2
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

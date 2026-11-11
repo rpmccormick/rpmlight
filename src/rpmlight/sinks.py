@@ -57,7 +57,12 @@ class MiniMqttPublisher:
             payload = _mqtt_str(self._client_id)
             if self._user:
                 payload += _mqtt_str(self._user) + _mqtt_str(self._password)
-            pkt = b"\x10" + _mqtt_encode_len(len(var_hdr) + len(payload)) + var_hdr + payload
+            pkt = (
+                b"\x10"
+                + _mqtt_encode_len(len(var_hdr) + len(payload))
+                + var_hdr
+                + payload
+            )
             s.sendall(pkt)
             resp = s.recv(4)
             if len(resp) == 4 and resp[0] == 0x20 and resp[3] == 0x00:
@@ -124,9 +129,9 @@ class NanoleafUdpSink:
         base_url = f"http://{self.ip}:{self.http_port}/api/v1/{self.token}"
         try:
             bri = max(1, min(100, int(brightness)))
-            state_payload = json.dumps({"on": {"value": True}, "brightness": {"value": bri}}).encode(
-                "utf-8"
-            )
+            state_payload = json.dumps(
+                {"on": {"value": True}, "brightness": {"value": bri}}
+            ).encode("utf-8")
             req_state = urllib.request.Request(
                 f"{base_url}/state",
                 data=state_payload,
@@ -136,7 +141,13 @@ class NanoleafUdpSink:
             urllib.request.urlopen(req_state, timeout=4).close()
 
             eff_payload = json.dumps(
-                {"write": {"command": "display", "animType": "extControl", "extControlVersion": "v2"}}
+                {
+                    "write": {
+                        "command": "display",
+                        "animType": "extControl",
+                        "extControlVersion": "v2",
+                    }
+                }
             ).encode("utf-8")
             req_eff = urllib.request.Request(
                 f"{base_url}/effects",
@@ -209,7 +220,9 @@ class WledUdpSink:
 class KodiJsonRpcToastSink:
     """Direct local Kodi JSON-RPC OSD notification sink (never switches TV HDMI input)."""
 
-    def __init__(self, host: str, port: int = 8080, display_time_ms: int = 4500) -> None:
+    def __init__(
+        self, host: str, port: int = 8080, display_time_ms: int = 4500
+    ) -> None:
         self.host = host
         self.port = port
         self.display_time_ms = display_time_ms

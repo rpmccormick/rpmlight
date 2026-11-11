@@ -1,5 +1,9 @@
 """RPMLight: Perceptual Zero-Blink Camera & Screen Ambilight Engine."""
 
+from rpmlight.brilliant_plugin import (
+    BrilliantAmbiPluginState,
+    start_brilliant_virtual_light,
+)
 from rpmlight.engine import (
     RPMLightEngine,
     SliderCurveParams,
@@ -36,6 +40,7 @@ from rpmlight.tpu import (
 __version__ = "0.5.0"
 
 __all__ = [
+    "BrilliantAmbiPluginState",
     "CropCalibrator",
     "CropMargins",
     "KodiJsonRpcToastSink",
@@ -62,5 +67,6 @@ __all__ = [
     "infer_scene_cue",
     "query_gemini_vision_cue",
     "sample_box_fast",
+    "start_brilliant_virtual_light",
     "suppress_non_dominant",
 ]

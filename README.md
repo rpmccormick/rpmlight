@@ -45,10 +45,29 @@ Traditional camera and screen-capture Ambilights (Hyperion, SignalRGB, Prismatik
 
 ---
 
-## Installation
+## Installation & Deployment Modes
+
+`rpmlight` supports **two deployment modes** out of the box:
+
+### Mode 1: Brilliant Smart Home Control Panel Plugin (`rpmlight-panel`)
+Runs directly on a Brilliant wall panel (`i.MX6ULL`), capturing from the panel's built-in `OV5640` camera (`imxv4l2videosrc` + hardware `bayer2yuv` ISP crop) and registering a native **`TV AmbiLED`** dimmable light (`PeripheralType.LIGHT = 27`) on the panel's local Thrift bus (`/var/run/brilliant/server_socket`):
+- Shows up natively on the **Brilliant touchscreen UI** with an On/Off toggle and `0–100%` perceptual slider.
+- Automatically bridged into Home Assistant by [`brilliant-mqtt`](https://github.com/joyfulhouse/brilliant-mqtt) with zero custom patches required.
+- Starts in **Camera Sleep Mode** (`/dev/video0` closed, red camera indicator LED OFF) when `TV AmbiLED` is OFF.
 
 ```bash
 pip install -e .
+cp systemd/rpmlight-brilliant-plugin.service /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now rpmlight-brilliant-plugin.service
+```
+
+### Mode 2: Standalone Linux Service (`rpmlight`)
+Runs on **any Linux box, Raspberry Pi, or mini-PC** using any standard V4L2 USB camera (`--source v4l2 --device /dev/video0`) or RTSP/HTTP video stream (`--source ffmpeg --device rtsp://...`), streaming 52-zone colors to Nanoleaf 4D (`--nanoleaf-ip`), WLED (`--wled-ip`), and Home Assistant MQTT (`--mqtt-host`):
+
+```bash
+pip install -e .
+cp systemd/rpmlight-standalone.service /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now rpmlight-standalone.service
 ```
 
 ## Quick Start

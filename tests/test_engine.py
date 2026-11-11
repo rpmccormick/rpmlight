@@ -84,7 +84,11 @@ def test_sample_box_fast_preserves_dark_gray_suit_and_red_white_flag() -> None:
     uv_size = (DEFAULT_CROP_W // 2) * (DEFAULT_CROP_H // 2)
     mv = memoryview(frame_gray)
     rgb_gray = sample_box_fast(
-        mv[:y_size], mv[y_size : y_size + uv_size], mv[y_size + uv_size :], ey_idx, euv_idx
+        mv[:y_size],
+        mv[y_size : y_size + uv_size],
+        mv[y_size + uv_size :],
+        ey_idx,
+        euv_idx,
     )
     assert max(rgb_gray) > 0
 
@@ -112,7 +116,11 @@ def test_brown_skin_wood_protection_and_bayer_fringe_cancellation() -> None:
     frame_brown = _make_i420_frame(y_val=34, u_val=116, v_val=144)
     mv_b = memoryview(frame_brown)
     r_b, g_b, b_b = sample_box_fast(
-        mv_b[:y_size], mv_b[y_size : y_size + uv_size], mv_b[y_size + uv_size :], ey_idx, euv_idx
+        mv_b[:y_size],
+        mv_b[y_size : y_size + uv_size],
+        mv_b[y_size + uv_size :],
+        ey_idx,
+        euv_idx,
     )
     assert g_b >= int(r_b * 0.55)
     assert b_b > 0
@@ -121,7 +129,11 @@ def test_brown_skin_wood_protection_and_bayer_fringe_cancellation() -> None:
     frame_t3 = _make_i420_frame(y_val=15, u_val=125, v_val=136)
     mv_t3 = memoryview(frame_t3)
     r_t3, g_t3, _b_t3 = sample_box_fast(
-        mv_t3[:y_size], mv_t3[y_size : y_size + uv_size], mv_t3[y_size + uv_size :], ey_idx, euv_idx
+        mv_t3[:y_size],
+        mv_t3[y_size : y_size + uv_size],
+        mv_t3[y_size + uv_size :],
+        ey_idx,
+        euv_idx,
     )
     assert r_t3 >= 100
     assert r_t3 > g_t3 * 2.5
@@ -132,7 +144,11 @@ def test_brown_skin_wood_protection_and_bayer_fringe_cancellation() -> None:
         frame_fringe[y_size + uv_size + uv_i] = 148 if (idx % 2 == 0) else 108
     mv_f = memoryview(frame_fringe)
     r_f, g_f, _b_f = sample_box_fast(
-        mv_f[:y_size], mv_f[y_size : y_size + uv_size], mv_f[y_size + uv_size :], ey_idx, euv_idx
+        mv_f[:y_size],
+        mv_f[y_size : y_size + uv_size],
+        mv_f[y_size + uv_size :],
+        ey_idx,
+        euv_idx,
     )
     assert abs(r_f - g_f) <= 22
 
@@ -231,7 +247,11 @@ def test_tpuaas_i420_to_ppm_and_scene_cue_inference() -> None:
     cue_drama = infer_scene_cue(
         {
             "detections": [
-                {"label": "person", "score": 0.88, "bbox_norm": [0.25, 0.15, 0.75, 0.85]}
+                {
+                    "label": "person",
+                    "score": 0.88,
+                    "bbox_norm": [0.25, 0.15, 0.75, 0.85],
+                }
             ],
             "tpu_ms": 5.94,
             "sram_cache_hit": True,
@@ -245,8 +265,16 @@ def test_tpuaas_i420_to_ppm_and_scene_cue_inference() -> None:
     cue_action = infer_scene_cue(
         {
             "detections": [
-                {"label": "person", "score": 0.82, "bbox_norm": [0.05, 0.30, 0.25, 0.70]},
-                {"label": "sports ball", "score": 0.75, "bbox_norm": [0.10, 0.40, 0.18, 0.52]},
+                {
+                    "label": "person",
+                    "score": 0.82,
+                    "bbox_norm": [0.05, 0.30, 0.25, 0.70],
+                },
+                {
+                    "label": "sports ball",
+                    "score": 0.75,
+                    "bbox_norm": [0.10, 0.40, 0.18, 0.52],
+                },
             ],
             "tpu_ms": 5.94,
             "sram_cache_hit": True,
@@ -320,10 +348,40 @@ def test_pause_freeze_gate_and_sub_bass_beat_detector() -> None:
     quiet_pcm = struct.pack("<800h", *([10] * 800))
     for _ in range(5):
         det.process_pcm_s16le(quiet_pcm)
-    kick_samples = [int(4500 * math.sin(2.0 * math.pi * 65.0 * i / 16000.0)) for i in range(800)]
+    kick_samples = [
+        int(4500 * math.sin(2.0 * math.pi * 65.0 * i / 16000.0)) for i in range(800)
+    ]
     kick_pcm = struct.pack("<800h", *kick_samples)
     pulse, strength, energy = det.process_pcm_s16le(kick_pcm)
     assert pulse is True
     assert strength >= 0.35
     assert energy > 0.0
 
+
+def test_cli_and_brilliant_plugin_modes() -> None:
+    from rpmlight.brilliant_plugin import (
+        BrilliantAmbiPluginState,
+        start_brilliant_virtual_light,
+    )
+    from rpmlight.cli import build_parser
+
+    # 1. Standalone Linux V4L2 mode
+    args_v4l2 = build_parser().parse_args(
+        ["--source", "v4l2", "--device", "/dev/video2", "--slider-pct", "75"]
+    )
+    assert args_v4l2.source == "v4l2"
+    assert args_v4l2.device == "/dev/video2"
+    assert args_v4l2.slider_pct == 75
+    assert args_v4l2.brilliant_plugin is False
+
+    # 2. Brilliant Panel Plugin mode
+    args_panel = build_parser().parse_args(
+        ["--brilliant-plugin", "--start-off", "--room-id", "room-123"]
+    )
+    assert args_panel.brilliant_plugin is True
+    assert args_panel.start_off is True
+    assert args_panel.room_id == "room-123"
+
+    # 3. Graceful fallback on non-Brilliant machines
+    st = BrilliantAmbiPluginState(room_id="room-123", enabled=False, slider_pct=50)
+    assert start_brilliant_virtual_light(st) is False

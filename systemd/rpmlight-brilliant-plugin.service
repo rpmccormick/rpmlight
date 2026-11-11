@@ -1,0 +1,15 @@
+[Unit]
+Description=RPMLight 52-Zone Nanoleaf 4D Streamer + Native Brilliant Panel Virtual Light Plugin
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/rpmlight
+ExecStartPre=-/bin/sh -c 'iw dev wlan0 set power_save off'
+ExecStart=/data/switch-embedded/env/bin/python3 -m rpmlight --brilliant-plugin --start-off --source brilliant
+Restart=always
+RestartSec=2
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

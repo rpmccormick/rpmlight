@@ -218,13 +218,25 @@ def infer_scene_cue(payload: dict[str, Any]) -> TPUSceneCue:
             d
             for d in detections
             if d.get("label")
-            in ("sports ball", "car", "motorcycle", "airplane", "boat", "skateboard", "surfboard")
+            in (
+                "sports ball",
+                "car",
+                "motorcycle",
+                "airplane",
+                "boat",
+                "skateboard",
+                "surfboard",
+            )
         ]
         max_person_area = 0.0
         for p in people:
             bbox = p.get("bbox_norm") or [0.0, 0.0, 0.0, 0.0]
             if len(bbox) == 4:
-                area = max(0.0, (float(bbox[2]) - float(bbox[0])) * (float(bbox[3]) - float(bbox[1])))
+                area = max(
+                    0.0,
+                    (float(bbox[2]) - float(bbox[0]))
+                    * (float(bbox[3]) - float(bbox[1])),
+                )
                 if area > max_person_area:
                     max_person_area = area
 
@@ -244,7 +256,12 @@ def infer_scene_cue(payload: dict[str, Any]) -> TPUSceneCue:
             for d in detections:
                 bbox = d.get("bbox_norm") or [0.0, 0.0, 1.0, 1.0]
                 if len(bbox) == 4:
-                    x1, y1, x2, y2 = float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])
+                    x1, y1, x2, y2 = (
+                        float(bbox[0]),
+                        float(bbox[1]),
+                        float(bbox[2]),
+                        float(bbox[3]),
+                    )
                     cx, cy = 0.5 * (x1 + x2), 0.5 * (y1 + y2)
                     area = max(0.01, (x2 - x1) * (y2 - y1))
                     w = float(d.get("score", 0.5)) * (area**0.5)
@@ -273,7 +290,9 @@ def infer_scene_cue(payload: dict[str, Any]) -> TPUSceneCue:
         float(bbox_raw[3]),
     )
     detections_list = payload.get("detections") or []
-    people_count = sum(1 for d in detections_list if d.get("label") in ("person", "face"))
+    people_count = sum(
+        1 for d in detections_list if d.get("label") in ("person", "face")
+    )
     return TPUSceneCue(
         scene_class=s_class,
         focal_x=max(0.0, min(1.0, fx)),
@@ -441,7 +460,9 @@ class TPUaaSBackgroundWorker:
         if self._thread is not None and self._thread.is_alive():
             return
         self._stop.clear()
-        self._thread = threading.Thread(target=self._run_loop, name="RPMLight-TPUaaS", daemon=True)
+        self._thread = threading.Thread(
+            target=self._run_loop, name="RPMLight-TPUaaS", daemon=True
+        )
         self._thread.start()
 
     def stop(self) -> None:
@@ -473,7 +494,9 @@ class TPUaaSBackgroundWorker:
     ) -> TPUSceneCue:
         """POST raw planar I420 bytes directly to `/v1/projects/ambiled` (0.0ms switch CPU cost)."""
         if not self.base_url:
-            bbox = estimate_i420_active_bbox_norm(frame_bytes, width=width, height=height)
+            bbox = estimate_i420_active_bbox_norm(
+                frame_bytes, width=width, height=height
+            )
             cue = TPUSceneCue(active_content_bbox_norm=bbox, recommended_bbox_norm=bbox)
             self.latest_cue = cue
             return cue
@@ -514,6 +537,8 @@ class TPUaaSBackgroundWorker:
                 continue
             raw_i420, w, h = item
             try:
-                self.query_i420_cue_sync(raw_i420, width=w, height=h, include_segmentation=False)
+                self.query_i420_cue_sync(
+                    raw_i420, width=w, height=h, include_segmentation=False
+                )
             except Exception:
                 pass

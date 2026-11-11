@@ -43,6 +43,7 @@ dev = [
 
 [project.scripts]
 rpmlight = "rpmlight.cli:main"
+rpmlight-panel = "rpmlight.cli:main_brilliant_plugin"
 
 [project.urls]
 Homepage = "https://github.com/rpmccormick/rpmlight"

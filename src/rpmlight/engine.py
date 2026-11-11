@@ -79,9 +79,16 @@ class SubBassBeatDetector:
         self.sample_rate_hz = sample_rate_hz
         self.decimate = decimate
         fs_d = sample_rate_hz / float(decimate)
-        self._sub_coeffs = [2.0 * math.cos(2.0 * math.pi * f / fs_d) for f in (45.0, 65.0, 85.0, 105.0, 130.0)]
-        self._mid_coeffs = [2.0 * math.cos(2.0 * math.pi * f / fs_d) for f in (190.0, 270.0)]
-        self._hi_coeffs = [2.0 * math.cos(2.0 * math.pi * f / fs_d) for f in (1300.0, 1700.0)]
+        self._sub_coeffs = [
+            2.0 * math.cos(2.0 * math.pi * f / fs_d)
+            for f in (45.0, 65.0, 85.0, 105.0, 130.0)
+        ]
+        self._mid_coeffs = [
+            2.0 * math.cos(2.0 * math.pi * f / fs_d) for f in (190.0, 270.0)
+        ]
+        self._hi_coeffs = [
+            2.0 * math.cos(2.0 * math.pi * f / fs_d) for f in (1300.0, 1700.0)
+        ]
         self.sub_fast = 1.0
         self.sub_slow = 1.0
         self.rms_slow = 180.0
@@ -100,7 +107,9 @@ class SubBassBeatDetector:
             s1 = s0
         return max(0.0, s1 * s1 + s2 * s2 - coeff * s1 * s2)
 
-    def process_pcm_s16le(self, pcm_bytes: bytes | memoryview) -> tuple[bool, float, float]:
+    def process_pcm_s16le(
+        self, pcm_bytes: bytes | memoryview
+    ) -> tuple[bool, float, float]:
         """Process a 50ms chunk (1600 bytes / 800 samples at 16 kHz) and return (beat_pulse, beat_strength, energy)."""
         n_samples = len(pcm_bytes) // 2
         if n_samples < self.decimate * 8:
@@ -118,8 +127,12 @@ class SubBassBeatDetector:
         self.rms_slow = 0.96 * self.rms_slow + 0.04 * max(120.0, rms)
 
         norm = float(n_dec * n_dec)
-        sub_pwr = max(self._goertzel_power(dec_zero, c) for c in self._sub_coeffs) / norm
-        mid_pwr = max(self._goertzel_power(dec_zero, c) for c in self._mid_coeffs) / norm
+        sub_pwr = (
+            max(self._goertzel_power(dec_zero, c) for c in self._sub_coeffs) / norm
+        )
+        mid_pwr = (
+            max(self._goertzel_power(dec_zero, c) for c in self._mid_coeffs) / norm
+        )
         hi_pwr = max(self._goertzel_power(dec_zero, c) for c in self._hi_coeffs) / norm
 
         bass_combined = sub_pwr + 0.35 * mid_pwr + 0.10 * hi_pwr
@@ -140,7 +153,9 @@ class SubBassBeatDetector:
         if is_kick:
             self._cooldown_chunks = 3
             self.beat_pulse = True
-            self.beat_strength = round(min(1.0, max(0.35, (flux_ratio - 1.35) / 1.85)), 3)
+            self.beat_strength = round(
+                min(1.0, max(0.35, (flux_ratio - 1.35) / 1.85)), 3
+            )
         else:
             self.beat_pulse = False
             self.beat_strength = round(max(0.0, self.beat_strength * 0.72), 3)
@@ -165,7 +180,9 @@ class ZoneFrameResult:
     scene_class: str = "auto"
     is_video_paused: bool = False
 
-    def to_diamond_dict(self, slider_pct: int = 50, lightshow_active: bool = True) -> dict[str, object]:
+    def to_diamond_dict(
+        self, slider_pct: int = 50, lightshow_active: bool = True
+    ) -> dict[str, object]:
         """Build the MQTT diamond + lightshow sync payload for Home Assistant & TPUaaS."""
         return {
             "up_rgb": self.up_rgb,
@@ -227,7 +244,9 @@ def apply_slider_curve(slider_pct: int) -> SliderCurveParams:
         t = (pct - 75) / 25.0
         nl_bri = 100
         blinkiness = int(round(215 + t * 40))  # 215 -> 255
-        edge_only_mix = 0.85 * (1.0 - t)  # 0.85 -> 0.0 (re-enables deep inner color at 100%!)
+        edge_only_mix = 0.85 * (
+            1.0 - t
+        )  # 0.85 -> 0.0 (re-enables deep inner color at 100%!)
         chroma_bleed = 0.0
         hue_max_bri = int(round(185 + t * 55))  # 185 -> 240
     return SliderCurveParams(
@@ -404,7 +423,9 @@ def build_auto_crop_depth_boxes(
     ispan_x = (ix_max - ix_min) - iw
     ispan_y = (iy_max - iy_min) - ih
 
-    precomputed: list[tuple[int, list[tuple[list[int], list[int]]], list[int], list[int]]] = []
+    precomputed: list[
+        tuple[int, list[tuple[list[int], list[int]]], list[int], list[int]]
+    ] = []
     for pid, nx, ny in build_52_panel_coords():
         u = nx / 850.0
         v = 1.0 - (ny / 450.0)
@@ -416,7 +437,11 @@ def build_auto_crop_depth_boxes(
         if ny == 0:
             # Bottom edge (pid 0..8 and 44..51): march straight UP at the exact same X
             if ex0 >= 265:
-                step_rects = [(ex0, 138, ew, 12), (ex0, 126, ew, 14), (ex0, 114, ew, 14)]
+                step_rects = [
+                    (ex0, 138, ew, 12),
+                    (ex0, 126, ew, 14),
+                    (ex0, 114, ew, 14),
+                ]
             else:
                 step_rects = [(ex0, 155, ew, 9), (ex0, 140, ew, 12), (ex0, 124, ew, 14)]
         elif ny == 450:
@@ -427,13 +452,19 @@ def build_auto_crop_depth_boxes(
             step_rects = [(3, ey0, ew, eh), (22, ey0, ew, eh), (42, ey0, ew, eh)]
         else:
             # Right edge (pid 35..43): march straight LEFT at the exact same Y (Step 2 = x=260..276 for 4:3)
-            step_rects = [(ex0, ey0, ew, eh), (ex0 - 19, ey0, ew, eh), (ex0 - 39, ey0, ew, eh)]
+            step_rects = [
+                (ex0, ey0, ew, eh),
+                (ex0 - 19, ey0, ew, eh),
+                (ex0 - 39, ey0, ew, eh),
+            ]
 
         for sx0, sy0, sw, sh in step_rects:
             sx0_c = max(0, min(width - sw, sx0))
             sy0_c = max(0, min(height - sh, sy0))
             edge_steps.append(
-                _precompute_box_indices(width, sx0_c, sy0_c, sx0_c + sw, sy0_c + sh, step=3)
+                _precompute_box_indices(
+                    width, sx0_c, sy0_c, sx0_c + sw, sy0_c + sh, step=3
+                )
             )
 
         ix0 = int(round(ix_min + u * ispan_x))
@@ -450,7 +481,9 @@ def build_auto_crop_depth_boxes(
     return precomputed
 
 
-def build_diamond_boxes(width: int = DEFAULT_CROP_W) -> dict[str, tuple[list[int], list[int]]]:
+def build_diamond_boxes(
+    width: int = DEFAULT_CROP_W,
+) -> dict[str, tuple[list[int], list[int]]]:
     """Precompute overhead ceiling sky boxes + far-left wing box (for Kitchen Cabinet sync)."""
     return {
         "sky_left": _precompute_box_indices(width, 40, 8, 160, 56, step=12),
@@ -489,7 +522,13 @@ def sample_box_fast(
         elif 16 <= yv < 42 and u >= 9 and v <= -5:
             u = int(u * 1.35)
             v = int(v * 1.20)
-        elif 9 <= yv <= 26 and v >= 4 and -7 <= u <= -1 and (yv - 6) <= v * 2.4 and v >= (-u) * 1.8:
+        elif (
+            9 <= yv <= 26
+            and v >= 4
+            and -7 <= u <= -1
+            and (yv - 6) <= v * 2.4
+            and v >= (-u) * 1.8
+        ):
             # True 650nm OLED Red (e.g. Terminator POV vision): G=0, B=0 so Y is low relative to +V through IR-cut filter!
             v = int(v * 2.6)
         uv_sq = u * u + v * v
@@ -516,7 +555,9 @@ def sample_box_fast(
                 chroma_f = uv_eff - 135
                 if chroma_f < 0:
                     chroma_f = 0
-                w = 4 + ((((luma_f >> 2) + ((chroma_f * luma_f) >> 9)) * matte_damp) >> 6)
+                w = 4 + (
+                    (((luma_f >> 2) + ((chroma_f * luma_f) >> 9)) * matte_damp) >> 6
+                )
 
         y_acc += yv * w
         u_acc += u * w
@@ -530,7 +571,13 @@ def sample_box_fast(
     ym = y_acc // w_acc
     um = u_acc // w_acc
     vm = v_acc // w_acc
-    is_oled_red = 9 <= ym <= 28 and vm >= 9 and -8 <= um <= -1 and (ym - 6) <= vm * 2.2 and vm >= (-um) * 1.8
+    is_oled_red = (
+        9 <= ym <= 28
+        and vm >= 9
+        and -8 <= um <= -1
+        and (ym - 6) <= vm * 2.2
+        and vm >= (-um) * 1.8
+    )
 
     # Suppress warm/red camera sensor noise in dark/shadowed regions (ym < 38) unless it is true 650nm OLED Red
     if ym < 38 and vm > 0 and vm < 18 and um >= -12 and not is_oled_red:
@@ -573,7 +620,9 @@ def sample_box_fast(
 
     # Brown / Tan / Skin / Wood vs. Warm Orange vs. Vivid Red protection:
     # RGB LEDs have no "brown" diode and turn brown/tan/wood blood-red unless G & B are preserved.
-    is_vivid_red = is_oled_red or (ym >= 48 and vm >= 24 and (um >= -10 or vm > (-um) * 2.2))
+    is_vivid_red = is_oled_red or (
+        ym >= 48 and vm >= 24 and (um >= -10 or vm > (-um) * 2.2)
+    )
     is_warm_orange = (not is_vivid_red) and ym >= 50 and vm >= 20 and um <= -12
     if vm > 0 and not is_vivid_red:
         r = (298 * c + 340 * vm + 128) >> 8
@@ -616,7 +665,9 @@ def sample_box_fast(
         s = min(1.0, 0.14 + (s - 0.14) * sat_boost)
         if ym < 52:
             base_s_floor = 0.78 if is_oled_red else 0.50
-            max_s = base_s_floor + (1.0 - base_s_floor) * min(1.0, max(0.0, (ym - 12.0) / 40.0))
+            max_s = base_s_floor + (1.0 - base_s_floor) * min(
+                1.0, max(0.0, (ym - 12.0) / 40.0)
+            )
             if s > max_s:
                 s = max_s
     else:
@@ -642,7 +693,9 @@ def sample_box_fast(
     )
 
 
-def hue_color_and_bri(rgb: tuple[int, int, int], max_bri: int = 140) -> tuple[list[int], int]:
+def hue_color_and_bri(
+    rgb: tuple[int, int, int], max_bri: int = 140
+) -> tuple[list[int], int]:
     """Convert raw sky RGB into a vibrant Hue bulb RGB + gentle ambient brightness."""
     r, g, b = rgb
     peak = max(r, g, b)
@@ -694,16 +747,24 @@ class RPMLightEngine:
         self.num_zones = len(self.boxes_auto_crop)
 
         # Neutral warm-white initial chromaticity (never biases red on startup)
-        self.ema_chroma: list[list[float]] = [[0.96, 0.96, 0.94] for _ in range(self.num_zones)]
+        self.ema_chroma: list[list[float]] = [
+            [0.96, 0.96, 0.94] for _ in range(self.num_zones)
+        ]
         self.ema_bri: list[float] = [38.0 for _ in range(self.num_zones)]
         self.zone_floor: list[float] = [38.0 for _ in range(self.num_zones)]
         self.was_screen_black: bool = False
         self.shared_black_floor: float = 36.0
         self.zone_depth_mix: list[float] = [0.0 for _ in range(self.num_zones)]
         self.active_edge_step: list[int] = [0 for _ in range(self.num_zones)]
-        self.prev_edge_rgb: list[list[float]] = [[0.0, 0.0, 0.0] for _ in range(self.num_zones)]
-        self.cached_inner_rgb: list[tuple[int, int, int]] = [(0, 0, 0) for _ in range(self.num_zones)]
-        self.sent_rgb: list[tuple[int, int, int]] = [(0, 0, 0) for _ in range(self.num_zones)]
+        self.prev_edge_rgb: list[list[float]] = [
+            [0.0, 0.0, 0.0] for _ in range(self.num_zones)
+        ]
+        self.cached_inner_rgb: list[tuple[int, int, int]] = [
+            (0, 0, 0) for _ in range(self.num_zones)
+        ]
+        self.sent_rgb: list[tuple[int, int, int]] = [
+            (0, 0, 0) for _ in range(self.num_zones)
+        ]
         self.diamond_ema: dict[str, list[float]] = {
             "sky": [0.0, 0.0, 0.0],
             "sky_left": [0.0, 0.0, 0.0],
@@ -711,7 +772,11 @@ class RPMLightEngine:
             "far_left": [0.0, 0.0, 0.0],
         }
         self.scene_class: str = "auto"  # "auto" | "drama" | "music_video"
-        self.wing_weights: dict[str, float] = {"west": 1.0, "east": 1.0, "far_left": 1.0}
+        self.wing_weights: dict[str, float] = {
+            "west": 1.0,
+            "east": 1.0,
+            "far_left": 1.0,
+        }
         self.kodi_art_zones: list[tuple[int, int, int]] | None = None
         self.kodi_art_sky: tuple[int, int, int] | None = None
         self._frame_idx = 0
@@ -738,7 +803,9 @@ class RPMLightEngine:
             for k in ("west", "east", "far_left"):
                 if k in ww:
                     target_w = max(0.50, min(1.50, float(ww[k])))
-                    self.wing_weights[k] = round(0.55 * self.wing_weights[k] + 0.45 * target_w, 3)
+                    self.wing_weights[k] = round(
+                        0.55 * self.wing_weights[k] + 0.45 * target_w, 3
+                    )
 
     def set_slider_pct(self, slider_pct: int) -> SliderCurveParams:
         """Apply the single-slider 1..100% curve to this engine instance."""
@@ -768,7 +835,9 @@ class RPMLightEngine:
             probe_mod = self._frame_idx & 3
             raw_colors: list[tuple[int, int, int]] = []
             edge_deltas: list[float] = []
-            for z_i, (_pid, edge_steps, iy_idx, iuv_idx) in enumerate(self.boxes_auto_crop):
+            for z_i, (_pid, edge_steps, iy_idx, iuv_idx) in enumerate(
+                self.boxes_auto_crop
+            ):
                 cur_step = self.active_edge_step[z_i]
                 ey_idx, euv_idx = edge_steps[cur_step]
                 er, eg, eb = sample_box_fast(
@@ -779,13 +848,17 @@ class RPMLightEngine:
                 # 3-Step Orthogonal Auto-Blackness Deletion:
                 # Re-probe all 3 steps every 4th frame per zone OR immediately when a lit Step 0 goes black
                 if (z_i & 3) == probe_mod or (
-                    cur_step == 0 and e_max < 32 and max(self.prev_edge_rgb[z_i]) >= 24.0
+                    cur_step == 0
+                    and e_max < 32
+                    and max(self.prev_edge_rgb[z_i]) >= 24.0
                 ):
                     s0_idx, s0_uv = edge_steps[0]
                     r0, g0, b0 = (
                         (er, eg, eb)
                         if cur_step == 0
-                        else sample_box_fast(y_plane, u_plane, v_plane, s0_idx, s0_uv, chroma_magnet=True)
+                        else sample_box_fast(
+                            y_plane, u_plane, v_plane, s0_idx, s0_uv, chroma_magnet=True
+                        )
                     )
                     p0 = max(r0, g0, b0)
                     if p0 >= 32:
@@ -797,13 +870,27 @@ class RPMLightEngine:
                         r1, g1, b1 = (
                             (er, eg, eb)
                             if cur_step == 1
-                            else sample_box_fast(y_plane, u_plane, v_plane, s1_idx, s1_uv, chroma_magnet=True)
+                            else sample_box_fast(
+                                y_plane,
+                                u_plane,
+                                v_plane,
+                                s1_idx,
+                                s1_uv,
+                                chroma_magnet=True,
+                            )
                         )
                         s2_idx, s2_uv = edge_steps[2]
                         r2, g2, b2 = (
                             (er, eg, eb)
                             if cur_step == 2
-                            else sample_box_fast(y_plane, u_plane, v_plane, s2_idx, s2_uv, chroma_magnet=True)
+                            else sample_box_fast(
+                                y_plane,
+                                u_plane,
+                                v_plane,
+                                s2_idx,
+                                s2_uv,
+                                chroma_magnet=True,
+                            )
                         )
                         p1 = max(r1, g1, b1)
                         p2 = max(r2, g2, b2)
@@ -857,11 +944,16 @@ class RPMLightEngine:
                 i_unit_g = ig / i_max if i_max > 0 else 0.0
                 i_unit_b = ib / i_max if i_max > 0 else 0.0
                 unit_hue_dist = (
-                    abs(i_unit_r - e_unit_r) + abs(i_unit_g - e_unit_g) + abs(i_unit_b - e_unit_b)
+                    abs(i_unit_r - e_unit_r)
+                    + abs(i_unit_g - e_unit_g)
+                    + abs(i_unit_b - e_unit_b)
                 )
 
                 is_distinct_pip = (
-                    (not is_bottom_zone) and i_max >= 24 and i_sat >= 0.22 and unit_hue_dist >= 0.48
+                    (not is_bottom_zone)
+                    and i_max >= 24
+                    and i_sat >= 0.22
+                    and unit_hue_dist >= 0.48
                 )
                 inner_has_color = i_max >= 22 and (
                     is_distinct_pip
@@ -884,7 +976,9 @@ class RPMLightEngine:
                     else:
                         max_depth = 0.58
                         step_up = 0.018
-                    self.zone_depth_mix[z_i] = min(max_depth, self.zone_depth_mix[z_i] + step_up)
+                    self.zone_depth_mix[z_i] = min(
+                        max_depth, self.zone_depth_mix[z_i] + step_up
+                    )
                 else:
                     self.zone_depth_mix[z_i] = max(0.0, self.zone_depth_mix[z_i] - 0.04)
 
@@ -902,10 +996,18 @@ class RPMLightEngine:
                     cam_g = int(round((1.0 - d_mix) * eg + d_mix * (ig * i_scale)))
                     cam_b = int(round((1.0 - d_mix) * eb + d_mix * (ib * i_scale)))
 
-                if self.kodi_art_zones is not None and self.slider_pct <= 82 and edge_delta < 38.0:
+                if (
+                    self.kodi_art_zones is not None
+                    and self.slider_pct <= 82
+                    and edge_delta < 38.0
+                ):
                     kr, kg, kb = self.kodi_art_zones[z_i]
                     cam_max = max(cam_r, cam_g, cam_b)
-                    cam_sat = (cam_max - min(cam_r, cam_g, cam_b)) / cam_max if cam_max > 0 else 0.0
+                    cam_sat = (
+                        (cam_max - min(cam_r, cam_g, cam_b)) / cam_max
+                        if cam_max > 0
+                        else 0.0
+                    )
                     s_scale = 1.0 - self.edge_only_mix
                     if cam_max < 44 or cam_sat < 0.18:
                         k_w = 0.72 * s_scale
@@ -921,7 +1023,9 @@ class RPMLightEngine:
         else:
             edge_deltas = [0.0 for _ in range(num_zones)]
             raw_colors = [
-                sample_box_fast(y_plane, u_plane, v_plane, y_idx, uv_idx, chroma_magnet=False)
+                sample_box_fast(
+                    y_plane, u_plane, v_plane, y_idx, uv_idx, chroma_magnet=False
+                )
                 for (_pid, y_idx, uv_idx) in self.boxes_true_edge
             ]
 
@@ -932,12 +1036,16 @@ class RPMLightEngine:
         global_mean_peak = sum(raw_peaks) / num_zones
         max_raw_peak = max(raw_peaks)
         is_screen_black = global_mean_peak < 11.0 and max_raw_peak < 32.0
-        midpoint_floor = 38.0 if global_mean_peak >= 18.0 else max(26.0, global_mean_peak * 1.45)
+        midpoint_floor = (
+            38.0 if global_mean_peak >= 18.0 else max(26.0, global_mean_peak * 1.45)
+        )
 
         # Pause / Still-Frame Freeze Gate:
         # If average change across all 52 zones is < 2.5% for 10 consecutive frames (~0.5s),
         # lock the LED output buffer dead-still until a frame changes by > 4.0%!
-        mean_delta_pct = (sum(edge_deltas) / (num_zones * 765.0)) * 100.0 if num_zones > 0 else 0.0
+        mean_delta_pct = (
+            (sum(edge_deltas) / (num_zones * 765.0)) * 100.0 if num_zones > 0 else 0.0
+        )
         max_delta_pct = (max(edge_deltas) / 765.0) * 100.0 if edge_deltas else 0.0
         if is_screen_black:
             self.pause_steady_frames = 0
@@ -968,17 +1076,29 @@ class RPMLightEngine:
             self.shared_black_floor = 36.0
             resting_min = 24.0
             for i in range(num_zones):
-                local_5_mean = sum(raw_peaks[(i + k) % num_zones] for k in range(-2, 3)) / 5.0
-                local_13_mean = sum(raw_peaks[(i + k) % num_zones] for k in range(-6, 7)) / 13.0
+                local_5_mean = (
+                    sum(raw_peaks[(i + k) % num_zones] for k in range(-2, 3)) / 5.0
+                )
+                local_13_mean = (
+                    sum(raw_peaks[(i + k) % num_zones] for k in range(-6, 7)) / 13.0
+                )
                 is_currently_sub = self.zone_floor[i] < midpoint_floor - 0.5
 
                 if is_currently_sub:
-                    if raw_peaks[i] >= 34.0 or edge_deltas[i] >= 42.0 or local_13_mean >= 32.0:
+                    if (
+                        raw_peaks[i] >= 34.0
+                        or edge_deltas[i] >= 42.0
+                        or local_13_mean >= 32.0
+                    ):
                         self.zone_floor[i] = midpoint_floor
                     else:
                         self.zone_floor[i] = max(resting_min, self.zone_floor[i] - 0.10)
                 else:
-                    if raw_peaks[i] < 9.0 and local_5_mean < 11.0 and edge_deltas[i] < 16.0:
+                    if (
+                        raw_peaks[i] < 9.0
+                        and local_5_mean < 11.0
+                        and edge_deltas[i] < 16.0
+                    ):
                         self.zone_floor[i] = max(resting_min, midpoint_floor - 0.6)
                     else:
                         self.zone_floor[i] = midpoint_floor
@@ -1006,18 +1126,24 @@ class RPMLightEngine:
                     self.zone_floor[i] = midpoint_floor
                 else:
                     neigh_floor_avg = 0.5 * (
-                        self.zone_floor[(i - 1) % num_zones] + self.zone_floor[(i + 1) % num_zones]
+                        self.zone_floor[(i - 1) % num_zones]
+                        + self.zone_floor[(i + 1) % num_zones]
                     )
                     self.zone_floor[i] = max(self.zone_floor[i], neigh_floor_avg - 5.0)
                 target_bris.append(max(self.zone_floor[i], float(raw_peaks[i])))
 
-        cut_bri_zones = sum(1 for i in range(num_zones) if abs(target_bris[i] - self.ema_bri[i]) >= 55.0)
+        cut_bri_zones = sum(
+            1 for i in range(num_zones) if abs(target_bris[i] - self.ema_bri[i]) >= 55.0
+        )
         mean_target_bri = sum(target_bris) / num_zones
         mean_ema_bri = sum(self.ema_bri) / num_zones
-        raw_scene_cut = b_norm >= 0.25 and cut_bri_zones >= 22 and abs(mean_target_bri - mean_ema_bri) >= 28.0
-        is_dialogue_ping_pong = (
-            self.scene_class == "drama"
-            or (self.scene_class == "auto" and self._frames_since_last_cut < 90)
+        raw_scene_cut = (
+            b_norm >= 0.25
+            and cut_bri_zones >= 22
+            and abs(mean_target_bri - mean_ema_bri) >= 28.0
+        )
+        is_dialogue_ping_pong = self.scene_class == "drama" or (
+            self.scene_class == "auto" and self._frames_since_last_cut < 90
         )
         if raw_scene_cut:
             self._frames_since_last_cut = 0
@@ -1106,16 +1232,26 @@ class RPMLightEngine:
 
             old_r, old_g, old_b = self.sent_rgb[i]
             deadband = 0 if (is_screen_black or new_bri < 42.0) else 2
-            if abs(ir - old_r) <= deadband and abs(ig - old_g) <= deadband and abs(ib - old_b) <= deadband:
+            if (
+                abs(ir - old_r) <= deadband
+                and abs(ig - old_g) <= deadband
+                and abs(ib - old_b) <= deadband
+            ):
                 ir, ig, ib = old_r, old_g, old_b
             else:
                 self.sent_rgb[i] = (ir, ig, ib)
 
         if is_scene_cut or self._frame_idx % 2 == 0 or self._frame_idx == 1:
             hue_alpha = 0.65 if is_scene_cut else (0.04 + 0.35 * (b_norm**1.5))
-            lr, lg, lb = sample_box_fast(y_plane, u_plane, v_plane, *self.diamond_boxes["sky_left"])
-            rr, rg, rb = sample_box_fast(y_plane, u_plane, v_plane, *self.diamond_boxes["sky_right"])
-            flr, flg, flb = sample_box_fast(y_plane, u_plane, v_plane, *self.diamond_boxes["far_left"])
+            lr, lg, lb = sample_box_fast(
+                y_plane, u_plane, v_plane, *self.diamond_boxes["sky_left"]
+            )
+            rr, rg, rb = sample_box_fast(
+                y_plane, u_plane, v_plane, *self.diamond_boxes["sky_right"]
+            )
+            flr, flg, flb = sample_box_fast(
+                y_plane, u_plane, v_plane, *self.diamond_boxes["far_left"]
+            )
             for k, (dr, dg, db) in (
                 ("sky_left", (lr, lg, lb)),
                 ("sky_right", (rr, rg, rb)),
@@ -1160,7 +1296,11 @@ class RPMLightEngine:
             ),
             max_bri=max(28, int(round(hue_max_bri * 0.72))),
         )
-        color_diff = abs(l_rgb[0] - r_rgb[0]) + abs(l_rgb[1] - r_rgb[1]) + abs(l_rgb[2] - r_rgb[2])
+        color_diff = (
+            abs(l_rgb[0] - r_rgb[0])
+            + abs(l_rgb[1] - r_rgb[1])
+            + abs(l_rgb[2] - r_rgb[2])
+        )
         if color_diff > 240 and l_bri > 60 and r_bri > 60:
             u_rgb, u_bri = l_rgb, l_bri
             d_rgb, d_bri = r_rgb, r_bri
@@ -1169,9 +1309,15 @@ class RPMLightEngine:
             d_rgb, d_bri = sky_rgb, sky_bri
 
         # Apply optional TPU/Gemini horizontal saliency wing weights (defaults to 1.0)
-        u_bri = max(24, min(255, int(round(u_bri * self.wing_weights.get("west", 1.0)))))
-        d_bri = max(24, min(255, int(round(d_bri * self.wing_weights.get("east", 1.0)))))
-        fl_bri = max(24, min(255, int(round(fl_bri * self.wing_weights.get("far_left", 1.0)))))
+        u_bri = max(
+            24, min(255, int(round(u_bri * self.wing_weights.get("west", 1.0))))
+        )
+        d_bri = max(
+            24, min(255, int(round(d_bri * self.wing_weights.get("east", 1.0))))
+        )
+        fl_bri = max(
+            24, min(255, int(round(fl_bri * self.wing_weights.get("far_left", 1.0))))
+        )
 
         mean_edge_delta = sum(edge_deltas) / num_zones if num_zones > 0 else 0.0
         energy = round(
@@ -1183,7 +1329,9 @@ class RPMLightEngine:
             ),
             3,
         )
-        beat_pulse = bool(is_scene_cut or (mean_edge_delta >= 28.0 and cut_bri_zones >= 12))
+        beat_pulse = bool(
+            is_scene_cut or (mean_edge_delta >= 28.0 and cut_bri_zones >= 12)
+        )
 
         return ZoneFrameResult(
             zones_rgb=list(self.sent_rgb),
