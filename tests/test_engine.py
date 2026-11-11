@@ -117,6 +117,15 @@ def test_brown_skin_wood_protection_and_bayer_fringe_cancellation() -> None:
     assert g_b >= int(r_b * 0.55)
     assert b_b > 0
 
+    # True 650nm OLED Red (Terminator POV vision: y=15, u=125 [-3], v=136 [+8]) must register as vivid crimson red
+    frame_t3 = _make_i420_frame(y_val=15, u_val=125, v_val=136)
+    mv_t3 = memoryview(frame_t3)
+    r_t3, g_t3, _b_t3 = sample_box_fast(
+        mv_t3[:y_size], mv_t3[y_size : y_size + uv_size], mv_t3[y_size + uv_size :], ey_idx, euv_idx
+    )
+    assert r_t3 >= 100
+    assert r_t3 > g_t3 * 2.5
+
     # Symmetric +v / -v Bayer demosaicing fringe at equal luma cancels to neutral (no red bias)
     frame_fringe = _make_i420_frame(y_val=28, u_val=128, v_val=128)
     for idx, uv_i in enumerate(euv_idx):

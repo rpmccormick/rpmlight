@@ -489,6 +489,9 @@ def sample_box_fast(
         elif 16 <= yv < 42 and u >= 9 and v <= -5:
             u = int(u * 1.35)
             v = int(v * 1.20)
+        elif 9 <= yv <= 26 and v >= 4 and -7 <= u <= -1 and (yv - 6) <= v * 2.4 and v >= (-u) * 1.8:
+            # True 650nm OLED Red (e.g. Terminator POV vision): G=0, B=0 so Y is low relative to +V through IR-cut filter!
+            v = int(v * 2.6)
         uv_sq = u * u + v * v
 
         # Symmetric per-pixel luma weighting: never bias weight by +v before averaging,
@@ -527,9 +530,10 @@ def sample_box_fast(
     ym = y_acc // w_acc
     um = u_acc // w_acc
     vm = v_acc // w_acc
+    is_oled_red = 9 <= ym <= 28 and vm >= 9 and -8 <= um <= -1 and (ym - 6) <= vm * 2.2 and vm >= (-um) * 1.8
 
-    # Suppress warm/red camera sensor noise in dark/shadowed regions (ym < 38)
-    if ym < 38 and vm > 0 and vm < 18 and um >= -12:
+    # Suppress warm/red camera sensor noise in dark/shadowed regions (ym < 38) unless it is true 650nm OLED Red
+    if ym < 38 and vm > 0 and vm < 18 and um >= -12 and not is_oled_red:
         vm = int(vm * 0.35)
         um = int(um * 0.50)
 
@@ -544,19 +548,21 @@ def sample_box_fast(
         um = int(round(um * c_taper))
         vm = int(round(vm * c_taper))
 
-    # Only allow +v (red) to lift perceived window peak if it is genuinely vivid red (vm >= 20)
-    v_lift = ((vm * 300) >> 8) if vm >= 20 else 0
+    # Only allow +v (red) to lift perceived window peak if it is genuinely vivid red (vm >= 20 or is_oled_red)
+    v_lift = ((vm * 300) >> 8) if (vm >= 20 or is_oled_red) else 0
     u_lift = ((um * 320) >> 8) if um >= 12 else 0
     win_peak = ym + max(0, v_lift, u_lift)
-    if mean_luma < 20.0 and uvm_sq < 25:
+    if mean_luma < 20.0 and uvm_sq < 25 and not is_oled_red:
         win_peak = min(win_peak, int(mean_luma * 1.75))
 
     pw = min(0.65, max(0.0, (mean_luma - 9.0) / 18.0) * 0.65)
     eff_luma = (1.0 - pw) * mean_luma + pw * float(win_peak)
+    if is_oled_red:
+        eff_luma = max(eff_luma, float(ym) + vm * 1.6)
     if eff_luma < 8.5:
         return (0, 0, 0)
 
-    if eff_luma < 16.0:
+    if eff_luma < 16.0 and not is_oled_red:
         chroma_scale = max(0.30, (eff_luma - 8.5) / 7.5)
         um = int(round(um * chroma_scale))
         vm = int(round(vm * chroma_scale))
@@ -567,7 +573,7 @@ def sample_box_fast(
 
     # Brown / Tan / Skin / Wood vs. Warm Orange vs. Vivid Red protection:
     # RGB LEDs have no "brown" diode and turn brown/tan/wood blood-red unless G & B are preserved.
-    is_vivid_red = ym >= 48 and vm >= 24 and (um >= -10 or vm > (-um) * 2.2)
+    is_vivid_red = is_oled_red or (ym >= 48 and vm >= 24 and (um >= -10 or vm > (-um) * 2.2))
     is_warm_orange = (not is_vivid_red) and ym >= 50 and vm >= 20 and um <= -12
     if vm > 0 and not is_vivid_red:
         r = (298 * c + 340 * vm + 128) >> 8
@@ -602,14 +608,15 @@ def sample_box_fast(
     if s > 0.14:
         if h < 0.13 or h > 0.88:
             # Never over-boost weak red/brown/amber hues into blood red
-            sat_boost = 0.85 if s < 0.68 else 1.12
+            sat_boost = 1.25 if is_vivid_red else (0.85 if s < 0.68 else 1.12)
         elif 0.40 <= h <= 0.56:
             sat_boost = 1.85
         else:
             sat_boost = 1.32
         s = min(1.0, 0.14 + (s - 0.14) * sat_boost)
         if ym < 52:
-            max_s = 0.50 + 0.50 * min(1.0, max(0.0, (ym - 12.0) / 40.0))
+            base_s_floor = 0.78 if is_oled_red else 0.50
+            max_s = base_s_floor + (1.0 - base_s_floor) * min(1.0, max(0.0, (ym - 12.0) / 40.0))
             if s > max_s:
                 s = max_s
     else:
