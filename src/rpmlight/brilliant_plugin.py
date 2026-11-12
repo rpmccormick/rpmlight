@@ -18,6 +18,7 @@ import inspect
 import json
 import os
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -45,6 +46,38 @@ class BrilliantAmbiPluginState:
     _inst: object | None = field(default=None, init=False, repr=False)
     _update_fn: object | None = field(default=None, init=False, repr=False)
     _toast_timer: threading.Timer | None = field(default=None, init=False, repr=False)
+    _lock_timer: threading.Timer | None = field(default=None, init=False, repr=False)
+
+    def cancel_pending_lock(self) -> None:
+        if self._lock_timer is not None:
+            try:
+                self._lock_timer.cancel()
+            except Exception:
+                pass
+            self._lock_timer = None
+
+    def schedule_slider_lock_in(self, pct: int, delay_s: float = 2.0) -> None:
+        self.cancel_pending_lock()
+        if self._toast_timer is not None:
+            try:
+                self._toast_timer.cancel()
+            except Exception:
+                pass
+            self._toast_timer = None
+        pct_clamped = max(1, min(100, int(pct)))
+
+        def _lock_in() -> None:
+            self._lock_timer = None
+            if not self.enabled:
+                return
+            self.slider_pct = pct_clamped
+            if self.on_change is not None:
+                self.on_change(True, pct_clamped)
+            self.schedule_status_toast(0.05)
+
+        self._lock_timer = threading.Timer(delay_s, _lock_in)
+        self._lock_timer.daemon = True
+        self._lock_timer.start()
 
     def schedule_status_toast(self, delay_s: float = 0.8) -> None:
         if self._toast_timer is not None:
@@ -139,6 +172,7 @@ def start_brilliant_virtual_light(
 
         async def _async_host() -> None:
             host_ready = False
+            suppress_intensity_until = 0.0
 
             async def _set_var(name: str, val: object) -> None:
                 if state._inst is not None and state._update_fn is not None:
@@ -150,6 +184,8 @@ def start_brilliant_virtual_light(
                         pass
 
             async def _delayed_reset_25() -> None:
+                nonlocal suppress_intensity_until
+                suppress_intensity_until = time.monotonic() + 0.6
                 await asyncio.sleep(0.10)
                 await _set_var("intensity", 250)
                 state.slider_pct = 25
@@ -163,6 +199,7 @@ def start_brilliant_virtual_light(
                     state.enabled = bool(on_int)
                     return True
                 if on_int == 1 and not state.enabled:
+                    state.cancel_pending_lock()
                     state.enabled = True
                     state.slider_pct = 25
                     if state.on_change is not None:
@@ -170,6 +207,7 @@ def start_brilliant_virtual_light(
                     asyncio.create_task(_delayed_reset_25())
                     state.schedule_status_toast(0.25)
                 elif on_int == 0 and state.enabled:
+                    state.cancel_pending_lock()
                     state.enabled = False
                     if state.on_change is not None:
                         state.on_change(False, state.slider_pct)
@@ -182,9 +220,10 @@ def start_brilliant_virtual_light(
                 except Exception:
                     return False
                 await _set_var("intensity", inten)
-                if not host_ready:
+                if not host_ready or time.monotonic() < suppress_intensity_until:
                     return True
                 if inten <= 0:
+                    state.cancel_pending_lock()
                     state.enabled = False
                     asyncio.create_task(_set_var("on", 0))
                     if state.on_change is not None:
@@ -194,10 +233,7 @@ def start_brilliant_virtual_light(
                     pct = max(1, min(100, round(inten / 10.0)))
                     was_off = not state.enabled
                     state.enabled = True
-                    state.slider_pct = pct
-                    if state.on_change is not None:
-                        state.on_change(True, pct)
-                    state.schedule_status_toast(1.0)
+                    state.schedule_slider_lock_in(pct, delay_s=2.0)
                     if was_off:
                         asyncio.create_task(_set_var("on", 1))
                 return True
@@ -274,6 +310,7 @@ def start_brilliant_virtual_light(
             await host.start()
             await _set_var("on", 1 if state.enabled else 0)
             await _set_var("intensity", state.slider_pct * 10)
+            await asyncio.sleep(0.5)
             host_ready = True
             while True:
                 await asyncio.sleep(3600)
