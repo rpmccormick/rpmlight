@@ -125,8 +125,8 @@ def test_brown_skin_wood_protection_and_bayer_fringe_cancellation() -> None:
     assert g_b >= int(r_b * 0.55)
     assert b_b > 0
 
-    # True 650nm OLED Red (Terminator POV vision: y=15, u=125 [-3], v=136 [+8]) must register as vivid crimson red
-    frame_t3 = _make_i420_frame(y_val=15, u_val=125, v_val=136)
+    # True 650nm OLED Red (Terminator POV vision: y=18, u=125 [-3], v=146 [+18]) must register as vivid crimson red
+    frame_t3 = _make_i420_frame(y_val=18, u_val=125, v_val=146)
     mv_t3 = memoryview(frame_t3)
     r_t3, g_t3, _b_t3 = sample_box_fast(
         mv_t3[:y_size],
@@ -137,6 +137,19 @@ def test_brown_skin_wood_protection_and_bayer_fringe_cancellation() -> None:
     )
     assert r_t3 >= 100
     assert r_t3 > g_t3 * 2.5
+
+    # 100% gray screen with mild warm corner vignette (y=42, u=126 [-2], v=134 [+6]) must stay neutral gray, NOT red
+    frame_gray_corner = _make_i420_frame(y_val=42, u_val=126, v_val=134)
+    mv_gc = memoryview(frame_gray_corner)
+    r_gc, g_gc, b_gc = sample_box_fast(
+        mv_gc[:y_size],
+        mv_gc[y_size : y_size + uv_size],
+        mv_gc[y_size + uv_size :],
+        ey_idx,
+        euv_idx,
+    )
+    assert abs(r_gc - g_gc) <= 6
+    assert abs(r_gc - b_gc) <= 8
 
     # Symmetric +v / -v Bayer demosaicing fringe at equal luma cancels to neutral (no red bias)
     frame_fringe = _make_i420_frame(y_val=28, u_val=128, v_val=128)
@@ -202,6 +215,10 @@ def test_single_slider_curve_and_descriptions() -> None:
     assert p70.edge_only_mix > p50.edge_only_mix
     assert p100.edge_only_mix == 0.0
 
+    title_25, msg_25 = describe_slider_setting(25, is_on=True)
+    assert "25%" in title_25
+    assert "TV Only" in title_25
+    assert "untouched" in msg_25
     title_50, msg_50 = describe_slider_setting(50, is_on=True)
     assert "50%" in title_50
     assert "black bars" in msg_50

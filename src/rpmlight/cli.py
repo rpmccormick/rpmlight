@@ -127,8 +127,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--slider-pct",
         type=int,
-        default=int(os.environ.get("RPMLIGHT_SLIDER_PCT", "50")),
-        help="Perceptual slider setting 1..100 (default: 50 Balanced Sweet Spot)",
+        default=int(os.environ.get("RPMLIGHT_SLIDER_PCT", "25")),
+        help="Perceptual slider setting 1..100 (default: 25 Smooth Default • TV Only)",
     )
     return parser
 

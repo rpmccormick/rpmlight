@@ -216,31 +216,31 @@ def apply_slider_curve(slider_pct: int) -> SliderCurveParams:
     """Map a single 1..100% user slider to RPMLight's continuous perceptual curve."""
     pct = max(1, min(100, int(slider_pct)))
     if pct <= 25:
-        # 1%..25%: Night Glow -> Smooth Cinematic
+        # 1%..25%: Night Glow -> Smooth Default (25% = blinkiness 18, 100% NL brightness, TV Only)
         t = (pct - 1) / 24.0
-        nl_bri = int(round(12 + t * 53))  # 12% -> 65%
-        blinkiness = int(round(8 + t * 64))  # 8 -> 72
+        nl_bri = int(round(12 + t * 88))  # 12% -> 100%
+        blinkiness = int(round(8 + t * 10))  # 8 -> 18
         edge_only_mix = 0.0
         chroma_bleed = 0.50 - t * 0.12  # 0.50 -> 0.38
         hue_max_bri = int(round(36 + t * 64))  # 36 -> 100
     elif pct <= 50:
-        # 25%..50%: Smooth Cinematic -> Default 50% Sweet Spot
+        # 25%..50%: Smooth Default (25%) -> 50% (+Living Room Ceiling Hue)
         t = (pct - 25) / 25.0
-        nl_bri = int(round(65 + t * 20))  # 65% -> 85%
-        blinkiness = int(round(72 + t * 68))  # 72 -> 140
+        nl_bri = 100
+        blinkiness = int(round(18 + t * 122))  # 18 -> 140
         edge_only_mix = 0.0
         chroma_bleed = 0.38 - t * 0.16  # 0.38 -> 0.22
         hue_max_bri = int(round(100 + t * 40))  # 100 -> 140
     elif pct <= 75:
-        # 50%..75%: Default Sweet Spot -> Crisp Pure Edge + Faster Action
+        # 50%..75%: +Living Room Hue -> 75% (+Kitchen Cabinet Lights & Crisp Edge)
         t = (pct - 50) / 25.0
-        nl_bri = int(round(85 + t * 15))  # 85% -> 100%
+        nl_bri = 100
         blinkiness = int(round(140 + t * 75))  # 140 -> 215
         edge_only_mix = t * 0.85  # 0.0 -> 0.85
         chroma_bleed = 0.22 * (1.0 - t)  # 0.22 -> 0.0
         hue_max_bri = int(round(140 + t * 45))  # 140 -> 185
     else:
-        # 75%..100%: Crisp Pure Edge -> Deep Vivid Rainbow (deep inner color + max speed)
+        # 75%..100%: +Kitchen Cabinets -> 100% (+Sunroom Full House Party)
         t = (pct - 75) / 25.0
         nl_bri = 100
         blinkiness = int(round(215 + t * 40))  # 215 -> 255
@@ -267,29 +267,29 @@ def describe_slider_setting(slider_pct: int, is_on: bool = True) -> tuple[str, s
             "Ambilight off — restoring warm white room lighting",
         )
     pct = max(1, min(100, int(slider_pct)))
-    if pct <= 20:
+    if pct <= 15:
         return (
-            f"TV AmbiLED: {pct}% (Night Glow)",
-            "Dim, ultra-relaxed ambient halo for dark-room viewing",
+            f"TV AmbiLED: {pct}% (Night Glow • TV Only)",
+            "Dim, ultra-relaxed ambient halo • Room lights untouched",
         )
-    if pct <= 42:
+    if pct <= 49:
         return (
-            f"TV AmbiLED: {pct}% (Smooth Blend)",
-            "Soft, dreamy color transitions with wide neighbor blending",
+            f"TV AmbiLED: {pct}% (Smooth Default • TV Only)",
+            "Buttery-smooth color glide • Room lights untouched",
         )
-    if pct <= 58:
+    if pct <= 74:
         return (
-            f"TV AmbiLED: {pct}% (Balanced Sweet Spot)",
-            "Auto-crops black bars with zero-blink brightness & natural colors",
+            f"TV AmbiLED: {pct}% (+Living Room Ceiling Hue)",
+            "Auto-crops black bars with Living Room Ceiling Hue synced",
         )
-    if pct <= 80:
+    if pct <= 98:
         return (
-            f"TV AmbiLED: {pct}% (Crisp & Fast)",
-            "Tight edge tracking & snappy action response",
+            f"TV AmbiLED: {pct}% (+Kitchen Cabinets & Crisp Edge)",
+            "Tight edge tracking + Living Room & Kitchen Cabinets synced",
         )
     return (
-        f"TV AmbiLED: {pct}% (Deep Vivid Rainbow)",
-        "Max speed, full brightness & deep inner-screen color reach",
+        f"TV AmbiLED: {pct}% (Full House Party • +Sunroom)",
+        "Max speed & deep inner color + Living Room, Kitchen & Sunroom",
     )
 
 
@@ -523,11 +523,11 @@ def sample_box_fast(
             u = int(u * 1.35)
             v = int(v * 1.20)
         elif (
-            9 <= yv <= 26
-            and v >= 4
+            12 <= yv <= 34
+            and v >= 11
             and -7 <= u <= -1
-            and (yv - 6) <= v * 2.4
-            and v >= (-u) * 1.8
+            and (yv - 6) <= v * 2.1
+            and v >= (-u) * 2.0
         ):
             # True 650nm OLED Red (e.g. Terminator POV vision): G=0, B=0 so Y is low relative to +V through IR-cut filter!
             v = int(v * 2.6)
@@ -572,11 +572,11 @@ def sample_box_fast(
     um = u_acc // w_acc
     vm = v_acc // w_acc
     is_oled_red = (
-        9 <= ym <= 28
-        and vm >= 9
+        11 <= ym <= 34
+        and vm >= 16
         and -8 <= um <= -1
-        and (ym - 6) <= vm * 2.2
-        and vm >= (-um) * 1.8
+        and (ym - 6) <= vm * 2.0
+        and vm >= (-um) * 2.0
     )
 
     # Suppress warm/red camera sensor noise in dark/shadowed regions (ym < 38) unless it is true 650nm OLED Red
@@ -589,9 +589,9 @@ def sample_box_fast(
     if ym >= 75:
         taper_limit = 220.0 if (um > 0 and vm <= 4) else 160.0
     else:
-        taper_limit = 24.0
+        taper_limit = 75.0
     if uvm_sq < taper_limit:
-        c_taper = (uvm_sq / taper_limit) ** 1.2
+        c_taper = (uvm_sq / taper_limit) ** 1.35
         um = int(round(um * c_taper))
         vm = int(round(vm * c_taper))
 
@@ -634,6 +634,10 @@ def sample_box_fast(
     r = 0 if r < 0 else (255 if r > 255 else r)
     g = 0 if g < 0 else (255 if g > 255 else g)
     b = 0 if b < 0 else (255 if b > 255 else b)
+
+    # Suppress green Bayer demosaicing fringes on thin white text strokes (e.g. "Daly / NBC")
+    if uvm_sq < 80 and g > r + 2 and g > b + 2:
+        g = max(r, b) + 1
 
     # Warm golden-orange vs. brown/wood/skin floor
     if is_warm_orange:
@@ -732,10 +736,10 @@ class RPMLightEngine:
         self.uv_size = (width // 2) * (height // 2)
         self.mode = mode
         self.blinkiness = max(0, min(255, blinkiness))
-        self.slider_pct = 50
+        self.slider_pct = 25
         self.edge_only_mix = 0.0
-        self.chroma_bleed_weight = 0.22
-        self.nl_Master_brightness = 85
+        self.chroma_bleed_weight = 0.38
+        self.nl_Master_brightness = 100
         self.hue_max_bri = int(round(90 + 95 * (self.blinkiness / 255.0)))
         if slider_pct is not None:
             self.set_slider_pct(slider_pct)
@@ -756,6 +760,7 @@ class RPMLightEngine:
         self.shared_black_floor: float = 36.0
         self.zone_depth_mix: list[float] = [0.0 for _ in range(self.num_zones)]
         self.active_edge_step: list[int] = [0 for _ in range(self.num_zones)]
+        self.zone_steady_frames: list[int] = [0 for _ in range(self.num_zones)]
         self.prev_edge_rgb: list[list[float]] = [
             [0.0, 0.0, 0.0] for _ in range(self.num_zones)
         ]
@@ -1160,6 +1165,11 @@ class RPMLightEngine:
         for i in range(num_zones):
             if self.is_video_paused and not is_screen_black:
                 continue
+            if edge_deltas[i] < 10.0:
+                self.zone_steady_frames[i] = min(100, self.zone_steady_frames[i] + 1)
+            elif edge_deltas[i] >= 18.0:
+                self.zone_steady_frames[i] = 0
+            is_zone_steady = self.is_video_paused or self.zone_steady_frames[i] >= 6
             prev_c = raw_colors[(i - 1) % num_zones]
             curr_c = raw_colors[i]
             next_c = raw_colors[(i + 1) % num_zones]
@@ -1190,6 +1200,9 @@ class RPMLightEngine:
                 tg = (1.0 - bleed) * uni_g + 0.5 * bleed * (prev_ch[1] + next_ch[1])
                 tb = (1.0 - bleed) * uni_b + 0.5 * bleed * (prev_ch[2] + next_ch[2])
                 c_alpha = 0.22 if is_screen_black else 0.08
+
+            if is_zone_steady and not is_scene_cut:
+                c_alpha *= 0.30
 
             cr = self.ema_chroma[i][0] + c_alpha * (tr - self.ema_chroma[i][0])
             cg = self.ema_chroma[i][1] + c_alpha * (tg - self.ema_chroma[i][1])
@@ -1231,7 +1244,11 @@ class RPMLightEngine:
             ib = max(0, min(255, int(round(self.ema_chroma[i][2] * eff_bri))))
 
             old_r, old_g, old_b = self.sent_rgb[i]
-            deadband = 0 if (is_screen_black or new_bri < 42.0) else 2
+            deadband = (
+                6
+                if (is_zone_steady and not is_screen_black)
+                else (0 if (is_screen_black or new_bri < 42.0) else 2)
+            )
             if (
                 abs(ir - old_r) <= deadband
                 and abs(ig - old_g) <= deadband

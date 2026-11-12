@@ -33,7 +33,7 @@ class BrilliantAmbiPluginState:
     peripheral_id: str = "rpmlight_tv_ambiled"
     room_id: str = ""
     enabled: bool = False
-    slider_pct: int = 50
+    slider_pct: int = 25
     mqtt_pub: MiniMqttPublisher | None = None
     mqtt_status_topic: str = "rpmlight/status"
     kodi_toast: KodiJsonRpcToastSink | None = None
@@ -149,10 +149,10 @@ def start_brilliant_virtual_light(
                     except Exception:
                         pass
 
-            async def _delayed_reset_50() -> None:
+            async def _delayed_reset_25() -> None:
                 await asyncio.sleep(0.10)
-                await _set_var("intensity", 500)
-                state.slider_pct = 50
+                await _set_var("intensity", 250)
+                state.slider_pct = 25
                 if state.on_change is not None:
                     state.on_change(state.enabled, state.slider_pct)
 
@@ -164,10 +164,10 @@ def start_brilliant_virtual_light(
                     return True
                 if on_int == 1 and not state.enabled:
                     state.enabled = True
-                    state.slider_pct = 50
+                    state.slider_pct = 25
                     if state.on_change is not None:
-                        state.on_change(True, 50)
-                    asyncio.create_task(_delayed_reset_50())
+                        state.on_change(True, 25)
+                    asyncio.create_task(_delayed_reset_25())
                     state.schedule_status_toast(0.25)
                 elif on_int == 0 and state.enabled:
                     state.enabled = False
@@ -220,7 +220,7 @@ def start_brilliant_virtual_light(
                         push_func=on_push_on,
                     ),
                     "intensity": VariableSpec(
-                        int, True, default_value=500, push_func=on_push_intensity
+                        int, True, default_value=250, push_func=on_push_intensity
                     ),
                     "dimmable": VariableSpec(int, False, default_value=1),
                     "max_intensity_value": VariableSpec(int, False, default_value=1000),
