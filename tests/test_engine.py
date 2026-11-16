@@ -338,6 +338,7 @@ def test_tpuaas_i420_to_ppm_and_scene_cue_inference() -> None:
 def test_pause_freeze_gate_and_sub_bass_beat_detector() -> None:
     import math
     import struct
+
     from rpmlight.engine import SubBassBeatDetector, suppress_non_dominant
 
     # 1. Dominant-channel power-curve suppression scales cleanly from 0.0 (50% natural) to 1.0 (100% neon/red)
@@ -402,3 +403,187 @@ def test_cli_and_brilliant_plugin_modes() -> None:
     # 3. Graceful fallback on non-Brilliant machines
     st = BrilliantAmbiPluginState(room_id="room-123", enabled=False, slider_pct=50)
     assert start_brilliant_virtual_light(st) is False
+
+
+def test_tpu_worker_accepts_width_height_and_uses_defaults() -> None:
+    worker = TPUaaSBackgroundWorker(
+        base_url="http://127.0.0.1:8090", width=640, height=360
+    )
+    assert worker.default_width == 640
+    assert worker.default_height == 360
+    frame = _make_i420_frame(width=640, height=360, y_val=90)
+    worker.offer_i420_frame(frame)
+    assert worker._pending_i420 is not None
+    _raw, w, h = worker._pending_i420
+    assert (w, h) == (640, 360)
+
+
+def test_non_default_resolutions_scale_cleanly_without_index_error() -> None:
+    # 1. Smaller resolution (160x90) must never raise IndexError in perimeter or diamond boxes
+    small_frame = _make_i420_frame(width=160, height=90, y_val=110, u_val=90, v_val=200)
+    eng_small = RPMLightEngine(width=160, height=90, slider_pct=25)
+    res_small = eng_small.process_i420_frame(small_frame)
+    assert len(res_small.zones_rgb) == 52
+    assert res_small.zones_rgb[0][0] > res_small.zones_rgb[0][2]
+
+    # 2. Larger resolution (640x360) must sample actual bottom-right perimeter (not top-left 320x176)
+    big_frame = _make_i420_frame(width=640, height=360, y_val=6, u_val=128, v_val=128)
+    _paint_i420_rect(
+        big_frame,
+        480,
+        260,
+        640,
+        350,
+        y_val=130,
+        u_val=220,
+        v_val=100,
+        width=640,
+        height=360,
+    )
+    eng_big = RPMLightEngine(width=640, height=360, slider_pct=50)
+    for _ in range(4):
+        res_big = eng_big.process_i420_frame(big_frame)
+    # Zone 45 sits along the bottom-right edge (nx=750, ny=0)
+    r45, _g45, b45 = res_big.zones_rgb[45]
+    assert b45 > r45 + 15
+
+
+def test_diamond_dict_reflects_actual_slider_pct_and_tier_restore() -> None:
+    from rpmlight.cli import compute_tier_restore_payload
+
+    frame = _make_i420_frame(y_val=110, u_val=128, v_val=128)
+    eng_25 = RPMLightEngine(slider_pct=25)
+    res_25 = eng_25.process_i420_frame(frame)
+    d25 = res_25.to_diamond_dict()
+    assert d25["slider_pct"] == 25
+    assert d25["lightshow_active"] is False
+
+    eng_60 = RPMLightEngine(slider_pct=60)
+    res_60 = eng_60.process_i420_frame(frame)
+    d60 = res_60.to_diamond_dict()
+    assert d60["slider_pct"] == 60
+    assert d60["lightshow_active"] is True
+    assert "cabinet_rgb" in d60 and "cabinet_bri" in d60
+
+    assert compute_tier_restore_payload(25, 60) is None
+    assert compute_tier_restore_payload(60, 25) == {
+        "restore_lr": True,
+        "restore_kitchen": False,
+        "restore_sunroom": False,
+        "slider_pct": 25,
+    }
+    assert compute_tier_restore_payload(100, 40) == {
+        "restore_lr": True,
+        "restore_kitchen": True,
+        "restore_sunroom": True,
+        "slider_pct": 40,
+    }
+
+
+def test_kodi_endpoint_normalization_and_mqtt_thread_safety() -> None:
+    import socket
+    import threading
+
+    from rpmlight.sinks import KodiJsonRpcToastSink, MiniMqttPublisher
+
+    k1 = KodiJsonRpcToastSink("192.168.100.11:8080")
+    assert k1.url == "http://192.168.100.11:8080/jsonrpc"
+    k2 = KodiJsonRpcToastSink("http://192.168.100.11:9090/jsonrpc")
+    assert k2.url == "http://192.168.100.11:9090/jsonrpc"
+    k3 = KodiJsonRpcToastSink("192.168.100.11")
+    assert k3.url == "http://192.168.100.11:8080/jsonrpc"
+
+    # Spin up a tiny loopback MQTT CONNACK server and hammer MiniMqttPublisher from 4 threads
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(2)
+    port = srv.getsockname()[1]
+    received = bytearray()
+
+    def _server() -> None:
+        conn, _ = srv.accept()
+        with conn:
+            conn.settimeout(2.0)
+            _ = conn.recv(256)
+            conn.sendall(b"\x20\x02\x00\x00")
+            while True:
+                try:
+                    data = conn.recv(4096)
+                    if not data:
+                        break
+                    received.extend(data)
+                except Exception:
+                    break
+        srv.close()
+
+    t_srv = threading.Thread(target=_server, daemon=True)
+    t_srv.start()
+
+    pub = MiniMqttPublisher("127.0.0.1", port=port)
+    workers = [
+        threading.Thread(
+            target=lambda idx=i: [
+                pub.publish("rpmlight/test", f"msg-{idx}-{j}") for j in range(10)
+            ]
+        )
+        for i in range(4)
+    ]
+    for w in workers:
+        w.start()
+    for w in workers:
+        w.join(timeout=3.0)
+    pub.close()
+    t_srv.join(timeout=2.0)
+    assert b"msg-0-0" in received and b"msg-3-9" in received
+
+
+def test_brilliant_bus_push_handlers_bare_on_vs_explicit_ha_brightness() -> None:
+    import asyncio
+
+    from rpmlight.brilliant_plugin import (
+        BrilliantAmbiPluginState,
+        build_bus_push_handlers,
+    )
+
+    async def _scenario() -> None:
+        bus_vars: dict[str, object] = {"on": 0, "intensity": 250}
+        changes: list[tuple[bool, int]] = []
+
+        async def _set_var(k: str, v: object) -> None:
+            bus_vars[k] = v
+
+        state = BrilliantAmbiPluginState(
+            enabled=False,
+            slider_pct=25,
+            on_change=lambda en, pct: changes.append((en, pct)),
+        )
+        on_push_on, on_push_intensity = build_bus_push_handlers(
+            state, _set_var, lock_in_delay_s=0.05
+        )
+
+        # 1. Bare ON tap -> defaults cleanly to 25% (intensity=250)
+        await on_push_on(1)
+        await asyncio.sleep(0.20)
+        assert state.enabled is True
+        assert state.slider_pct == 25
+        assert bus_vars["intensity"] == 250
+
+        # 2. Turn OFF after running at 80% -> dormant intensity resets to 250
+        await on_push_intensity(800)
+        await asyncio.sleep(0.08)
+        assert state.slider_pct == 80
+        await on_push_on(0)
+        await asyncio.sleep(0.35)
+        assert state.enabled is False
+        assert bus_vars["intensity"] == 250
+
+        # 3. HA light.turn_on(brightness_pct=65) from OFF -> on=1 then intensity=650 (not clobbered to 25%!)
+        await on_push_on(1)
+        await asyncio.sleep(0.02)
+        await on_push_intensity(650)
+        await asyncio.sleep(0.22)
+        assert state.enabled is True
+        assert state.slider_pct == 65
+        assert bus_vars["intensity"] == 650
+
+    asyncio.run(_scenario())

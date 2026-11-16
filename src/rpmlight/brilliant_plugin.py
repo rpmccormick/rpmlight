@@ -16,11 +16,10 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
-import os
 import threading
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 from rpmlight.engine import describe_slider_setting
 from rpmlight.sinks import KodiJsonRpcToastSink, MiniMqttPublisher
@@ -133,6 +132,144 @@ class BrilliantAmbiPluginState:
             pass
 
 
+def build_bus_push_handlers(
+    state: BrilliantAmbiPluginState,
+    set_var: Callable[[str, object], Awaitable[None]],
+    *,
+    is_host_ready: Callable[[], bool] = lambda: True,
+    lock_in_delay_s: float = 2.0,
+) -> tuple[Callable[..., Awaitable[bool]], Callable[..., Awaitable[bool]]]:
+    """Create ``(on_push_on, on_push_intensity)`` handlers for the hosted Brilliant peripheral.
+
+    Handles both bare wall-switch ON taps (defaulting cleanly to 25%) and explicit
+    Home Assistant ``light.turn_on(brightness_pct=X)`` commands (where ``on=1`` is
+    immediately followed by an explicit ``intensity != pre_on_intensity``).
+    """
+    current_bus_intensity = state.slider_pct * 10
+    pre_on_intensity = current_bus_intensity
+    turn_on_window_until = 0.0
+    reset_25_task: asyncio.Task[None] | None = None
+    dormant_reset_task: asyncio.Task[None] | None = None
+
+    def _cancel_task(t: asyncio.Task[None] | None) -> None:
+        if t is not None and not t.done():
+            t.cancel()
+
+    async def _delayed_reset_25() -> None:
+        nonlocal current_bus_intensity
+        try:
+            await asyncio.sleep(0.15)
+        except asyncio.CancelledError:
+            return
+        if not state.enabled:
+            return
+        current_bus_intensity = 250
+        await set_var("intensity", 250)
+        state.slider_pct = 25
+        if state.on_change is not None:
+            state.on_change(True, 25)
+        state.schedule_status_toast(0.20)
+
+    async def _dormant_reset_intensity_250() -> None:
+        """Reset dormant bus intensity to 250 after turning OFF so next bare ON starts at 25%."""
+        nonlocal current_bus_intensity
+        try:
+            await asyncio.sleep(0.30)
+        except asyncio.CancelledError:
+            return
+        if state.enabled:
+            return
+        current_bus_intensity = 250
+        await set_var("intensity", 250)
+
+    def _extract_arg(args: tuple[object, ...]) -> object:
+        # Cython VariableSpec push_func may pass (val,) or (self, val)
+        return args[-1] if args else None
+
+    async def on_push_on(*args: object) -> bool:
+        nonlocal \
+            pre_on_intensity, \
+            turn_on_window_until, \
+            reset_25_task, \
+            dormant_reset_task
+        val = _extract_arg(args)
+        on_int = 1 if str(val).strip() in ("1", "True", "true") else 0
+        await set_var("on", on_int)
+        if not is_host_ready():
+            state.enabled = bool(on_int)
+            return True
+        if on_int == 1 and not state.enabled:
+            _cancel_task(dormant_reset_task)
+            _cancel_task(reset_25_task)
+            state.cancel_pending_lock()
+            pre_on_intensity = current_bus_intensity
+            turn_on_window_until = time.monotonic() + 0.60
+            state.enabled = True
+            state.slider_pct = 25
+            if state.on_change is not None:
+                state.on_change(True, 25)
+            reset_25_task = asyncio.create_task(_delayed_reset_25())
+        elif on_int == 0 and state.enabled:
+            _cancel_task(reset_25_task)
+            _cancel_task(dormant_reset_task)
+            turn_on_window_until = 0.0
+            state.cancel_pending_lock()
+            state.enabled = False
+            if state.on_change is not None:
+                state.on_change(False, state.slider_pct)
+            state.schedule_status_toast(0.25)
+            dormant_reset_task = asyncio.create_task(_dormant_reset_intensity_250())
+        return True
+
+    async def on_push_intensity(*args: object) -> bool:
+        nonlocal \
+            current_bus_intensity, \
+            turn_on_window_until, \
+            reset_25_task, \
+            dormant_reset_task
+        val = _extract_arg(args)
+        try:
+            inten = int(float(str(val).strip()))
+        except Exception:
+            return False
+        await set_var("intensity", inten)
+        if not is_host_ready():
+            current_bus_intensity = inten
+            return True
+
+        now = time.monotonic()
+        if now < turn_on_window_until:
+            # Ignore stale pre-off intensity echo or our own 250 reset,
+            # EXCEPT when an explicit new target brightness arrives (e.g. HA light.turn_on(brightness_pct=60)).
+            if inten in (pre_on_intensity, 250) or inten <= 0:
+                return True
+            _cancel_task(reset_25_task)
+            turn_on_window_until = 0.0
+
+        current_bus_intensity = inten
+        if inten <= 0:
+            _cancel_task(reset_25_task)
+            _cancel_task(dormant_reset_task)
+            state.cancel_pending_lock()
+            state.enabled = False
+            asyncio.create_task(set_var("on", 0))
+            if state.on_change is not None:
+                state.on_change(False, state.slider_pct)
+            state.schedule_status_toast(0.25)
+            dormant_reset_task = asyncio.create_task(_dormant_reset_intensity_250())
+        else:
+            _cancel_task(dormant_reset_task)
+            pct = max(1, min(100, round(inten / 10.0)))
+            was_off = not state.enabled
+            state.enabled = True
+            state.schedule_slider_lock_in(pct, delay_s=lock_in_delay_s)
+            if was_off:
+                asyncio.create_task(set_var("on", 1))
+        return True
+
+    return on_push_on, on_push_intensity
+
+
 def start_brilliant_virtual_light(
     state: BrilliantAmbiPluginState,
     socket_path: str = "/var/run/brilliant/server_socket",
@@ -158,11 +295,7 @@ def start_brilliant_virtual_light(
         return False
 
     def _thread_main() -> None:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        state._loop = loop
         state._update_fn = Peripheral.__dict__["_set_value_internal"]
-
         flags = gflags.FLAGS
         try:
             _ = flags.message_bus_server_socket_path
@@ -170,153 +303,141 @@ def start_brilliant_virtual_light(
             flags([""])
         flags.message_bus_server_socket_path = socket_path
 
-        async def _async_host() -> None:
-            host_ready = False
-            suppress_intensity_until = 0.0
+        while True:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            state._loop = loop
 
-            async def _set_var(name: str, val: object) -> None:
-                if state._inst is not None and state._update_fn is not None:
-                    try:
-                        res = state._update_fn(state._inst, name, val, notify=True)  # type: ignore[operator]
-                        if inspect.isawaitable(res):
-                            await res
-                    except Exception:
-                        pass
+            async def _async_host(
+                host_loop: asyncio.AbstractEventLoop = loop,
+            ) -> None:
+                host_ready = False
 
-            async def _delayed_reset_25() -> None:
-                nonlocal suppress_intensity_until
-                suppress_intensity_until = time.monotonic() + 0.6
-                await asyncio.sleep(0.10)
-                await _set_var("intensity", 250)
-                state.slider_pct = 25
-                if state.on_change is not None:
-                    state.on_change(state.enabled, state.slider_pct)
+                async def _set_var(name: str, val: object) -> None:
+                    if state._inst is not None and state._update_fn is not None:
+                        try:
+                            res = state._update_fn(state._inst, name, val, notify=True)  # type: ignore[operator]
+                            if inspect.isawaitable(res):
+                                await res
+                        except Exception:
+                            pass
 
-            async def on_push_on(val: object) -> bool:
-                on_int = 1 if str(val).strip() in ("1", "True", "true") else 0
-                await _set_var("on", on_int)
-                if not host_ready:
-                    state.enabled = bool(on_int)
-                    return True
-                if on_int == 1 and not state.enabled:
-                    state.cancel_pending_lock()
-                    state.enabled = True
-                    state.slider_pct = 25
-                    if state.on_change is not None:
-                        state.on_change(True, 25)
-                    asyncio.create_task(_delayed_reset_25())
-                    state.schedule_status_toast(0.25)
-                elif on_int == 0 and state.enabled:
-                    state.cancel_pending_lock()
-                    state.enabled = False
-                    if state.on_change is not None:
-                        state.on_change(False, state.slider_pct)
-                    state.schedule_status_toast(0.25)
-                return True
+                on_push_on, on_push_intensity = build_bus_push_handlers(
+                    state,
+                    _set_var,
+                    is_host_ready=lambda: host_ready,
+                )
 
-            async def on_push_intensity(val: object) -> bool:
+                def make_push_passthrough(var_name: str) -> object:
+                    async def _push(*args: object) -> bool:
+                        val = args[-1] if args else None
+                        await _set_var(var_name, val)
+                        return True
+
+                    return _push
+
+                room_ids = [state.room_id] if state.room_id else []
+
+                def build_vars() -> dict[str, object]:
+                    return {
+                        "on": VariableSpec(
+                            int,
+                            True,
+                            default_value=1 if state.enabled else 0,
+                            push_func=on_push_on,
+                        ),
+                        "intensity": VariableSpec(
+                            int,
+                            True,
+                            default_value=state.slider_pct * 10,
+                            push_func=on_push_intensity,
+                        ),
+                        "dimmable": VariableSpec(int, False, default_value=1),
+                        "max_intensity_value": VariableSpec(
+                            int, False, default_value=1000
+                        ),
+                        "minimum_dim_level": VariableSpec(
+                            int,
+                            True,
+                            default_value=10,
+                            push_func=make_push_passthrough("minimum_dim_level"),
+                        ),
+                        "maximum_dim_level": VariableSpec(
+                            int,
+                            True,
+                            default_value=1000,
+                            push_func=make_push_passthrough("maximum_dim_level"),
+                        ),
+                        "display_name": VariableSpec(
+                            str,
+                            True,
+                            default_value=state.display_name,
+                            push_func=make_push_passthrough("display_name"),
+                        ),
+                        "room_assignment": VariableSpec(
+                            RoomAssignment,
+                            True,
+                            default_value=RoomAssignment(room_ids=room_ids),
+                            push_func=make_push_passthrough("room_assignment"),
+                        ),
+                        "mode_transition_settings": VariableSpec(
+                            str,
+                            True,
+                            default_value="{}",
+                            push_func=make_push_passthrough("mode_transition_settings"),
+                        ),
+                    }
+
+                class TVAmbiLightPeripheral(Peripheral):  # type: ignore[misc]
+                    def __init__(self, *args: object, **kwargs: object) -> None:
+                        super().__init__(*args, **kwargs)
+                        state._inst = self
+
+                    @property
+                    def name(self) -> str:
+                        return state.display_name
+
+                    @property
+                    def peripheral_type(self) -> int:
+                        return 27  # PeripheralType.LIGHT
+
+                    def _my_variables(self) -> dict[str, object]:
+                        return build_vars()
+
+                cfg = PeripheralConfig(state.peripheral_id, TVAmbiLightPeripheral)
+                spec = HostedStartableSpec(state.peripheral_id, cfg, {})
+                host = PeripheralHost(
+                    loop=host_loop,
+                    startable_id=state.peripheral_id,
+                    startables_to_host=[spec],
+                    parallel_registration_limit=1,
+                    raise_errors_for_lost_user_configured_data=False,
+                    message_bus_address_override=None,
+                )
+                await host.start()
+                await _set_var("on", 1 if state.enabled else 0)
+                await _set_var("intensity", state.slider_pct * 10)
+                await asyncio.sleep(0.5)
+                host_ready = True
+                while True:
+                    await asyncio.sleep(3600)
+
+            try:
+                loop.run_until_complete(_async_host())
+            except Exception as exc:
+                print(
+                    f"[RPMLight] Brilliant Thrift host retrying in 2s after: {exc}",
+                    flush=True,
+                )
+            finally:
                 try:
-                    inten = int(float(str(val).strip()))
+                    loop.close()
                 except Exception:
-                    return False
-                await _set_var("intensity", inten)
-                if not host_ready or time.monotonic() < suppress_intensity_until:
-                    return True
-                if inten <= 0:
-                    state.cancel_pending_lock()
-                    state.enabled = False
-                    asyncio.create_task(_set_var("on", 0))
-                    if state.on_change is not None:
-                        state.on_change(False, state.slider_pct)
-                    state.schedule_status_toast(0.25)
-                else:
-                    pct = max(1, min(100, round(inten / 10.0)))
-                    was_off = not state.enabled
-                    state.enabled = True
-                    state.schedule_slider_lock_in(pct, delay_s=2.0)
-                    if was_off:
-                        asyncio.create_task(_set_var("on", 1))
-                return True
+                    pass
+            time.sleep(2.0)
 
-            def make_push_passthrough(var_name: str) -> object:
-                async def _push(val: object) -> bool:
-                    await _set_var(var_name, val)
-                    return True
-
-                return _push
-
-            room_ids = [state.room_id] if state.room_id else []
-
-            def build_vars() -> dict[str, object]:
-                return {
-                    "on": VariableSpec(
-                        int,
-                        True,
-                        default_value=1 if state.enabled else 0,
-                        push_func=on_push_on,
-                    ),
-                    "intensity": VariableSpec(
-                        int, True, default_value=250, push_func=on_push_intensity
-                    ),
-                    "dimmable": VariableSpec(int, False, default_value=1),
-                    "max_intensity_value": VariableSpec(int, False, default_value=1000),
-                    "minimum_dim_level": VariableSpec(
-                        int,
-                        True,
-                        default_value=10,
-                        push_func=make_push_passthrough("minimum_dim_level"),
-                    ),
-                    "maximum_dim_level": VariableSpec(
-                        int,
-                        True,
-                        default_value=1000,
-                        push_func=make_push_passthrough("maximum_dim_level"),
-                    ),
-                    "display_name": VariableSpec(
-                        str,
-                        True,
-                        default_value=state.display_name,
-                        push_func=make_push_passthrough("display_name"),
-                    ),
-                    "room_assignment": VariableSpec(
-                        RoomAssignment,
-                        True,
-                        default_value=RoomAssignment(room_ids=room_ids),
-                        push_func=make_push_passthrough("room_assignment"),
-                    ),
-                }
-
-            class TVAmbiLightPeripheral(Peripheral):  # type: ignore[misc]
-                def __init__(self, *args: object, **kwargs: object) -> None:
-                    super().__init__(*args, **kwargs)
-                    state._inst = self
-
-                def _my_variables(self) -> dict[str, object]:
-                    return build_vars()
-
-            spec = HostedStartableSpec(
-                state.peripheral_id,
-                PeripheralConfig(state.peripheral_id, TVAmbiLightPeripheral),
-                {"peripheral_type": 27},  # PeripheralType.LIGHT
-            )
-            host = PeripheralHost(
-                loop=loop,
-                startable_id=f"rpmlight_host_{os.getpid()}",
-                startables_to_host=[spec],
-                parallel_registration_limit=1,
-                raise_errors_for_lost_user_configured_data=False,
-                message_bus_address_override=None,
-            )
-            await host.start()
-            await _set_var("on", 1 if state.enabled else 0)
-            await _set_var("intensity", state.slider_pct * 10)
-            await asyncio.sleep(0.5)
-            host_ready = True
-            while True:
-                await asyncio.sleep(3600)
-
-        loop.run_until_complete(_async_host())
-
-    t = threading.Thread(target=_thread_main, daemon=True)
+    t = threading.Thread(
+        target=_thread_main, name="RPMLight-BrilliantHost", daemon=True
+    )
     t.start()
     return True

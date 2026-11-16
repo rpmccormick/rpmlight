@@ -425,6 +425,8 @@ class TPUaaSBackgroundWorker:
         self,
         base_url: str | None = None,
         *,
+        width: int = DEFAULT_CROP_W,
+        height: int = DEFAULT_CROP_H,
         gemini_api_key: str | None = None,
         interval_s: float = 4.0,
         sram_friendly_model: str = "ssd_coco",
@@ -433,6 +435,8 @@ class TPUaaSBackgroundWorker:
     ) -> None:
         env_url = os.environ.get("RPMLIGHT_TPU_URL", "").strip()
         self.base_url = (base_url if base_url is not None else env_url).rstrip("/")
+        self.default_width = int(width)
+        self.default_height = int(height)
         env_key = (
             os.environ.get("RPMLIGHT_GEMINI_API_KEY")
             or os.environ.get("GEMINI_API_KEY")
@@ -471,8 +475,8 @@ class TPUaaSBackgroundWorker:
     def offer_i420_frame(
         self,
         frame: bytes | memoryview,
-        width: int = DEFAULT_CROP_W,
-        height: int = DEFAULT_CROP_H,
+        width: int | None = None,
+        height: int | None = None,
     ) -> None:
         """Offer a single random/periodic I420 frame if `interval_s` (4.0s) has elapsed."""
         if not self.enabled:
@@ -481,22 +485,24 @@ class TPUaaSBackgroundWorker:
         if now - self._last_submit_ts < self.interval_s:
             return
         self._last_submit_ts = now
+        w = self.default_width if width is None else int(width)
+        h = self.default_height if height is None else int(height)
         with self._lock:
-            self._pending_i420 = (bytes(frame), width, height)
+            self._pending_i420 = (bytes(frame), w, h)
 
     def query_i420_cue_sync(
         self,
         frame_bytes: bytes,
-        width: int = DEFAULT_CROP_W,
-        height: int = DEFAULT_CROP_H,
+        width: int | None = None,
+        height: int | None = None,
         *,
         include_segmentation: bool = False,
     ) -> TPUSceneCue:
         """POST raw planar I420 bytes directly to `/v1/projects/ambiled` (0.0ms switch CPU cost)."""
+        w = self.default_width if width is None else int(width)
+        h = self.default_height if height is None else int(height)
         if not self.base_url:
-            bbox = estimate_i420_active_bbox_norm(
-                frame_bytes, width=width, height=height
-            )
+            bbox = estimate_i420_active_bbox_norm(frame_bytes, width=w, height=h)
             cue = TPUSceneCue(active_content_bbox_norm=bbox, recommended_bbox_norm=bbox)
             self.latest_cue = cue
             return cue
@@ -504,8 +510,8 @@ class TPUaaSBackgroundWorker:
         q = urllib.parse.urlencode(
             {
                 "format": "i420",
-                "width": width,
-                "height": height,
+                "width": w,
+                "height": h,
                 "include_segmentation": str(include_segmentation).lower(),
                 "model": self.sram_friendly_model,
                 "priority": self.priority,

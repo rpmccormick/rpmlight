@@ -179,11 +179,18 @@ class ZoneFrameResult:
     energy: float = 0.0
     scene_class: str = "auto"
     is_video_paused: bool = False
+    slider_pct: int = 25
 
     def to_diamond_dict(
-        self, slider_pct: int = 50, lightshow_active: bool = True
+        self,
+        slider_pct: int | None = None,
+        lightshow_active: bool | None = None,
     ) -> dict[str, object]:
         """Build the MQTT diamond + lightshow sync payload for Home Assistant & TPUaaS."""
+        eff_pct = self.slider_pct if slider_pct is None else int(slider_pct)
+        eff_active = (
+            (eff_pct >= 50) if lightshow_active is None else bool(lightshow_active)
+        )
         return {
             "up_rgb": self.up_rgb,
             "up_bri": self.up_bri,
@@ -191,12 +198,14 @@ class ZoneFrameResult:
             "down_bri": self.down_bri,
             "left_rgb": self.left_rgb,
             "left_bri": self.left_bri,
+            "cabinet_rgb": self.left_rgb,
+            "cabinet_bri": self.left_bri,
             "is_scene_cut": self.is_scene_cut,
             "beat_pulse": self.beat_pulse,
             "energy": self.energy,
             "scene_class": self.scene_class,
-            "slider_pct": slider_pct,
-            "lightshow_active": lightshow_active,
+            "slider_pct": eff_pct,
+            "lightshow_active": eff_active,
         }
 
 
@@ -316,43 +325,97 @@ def build_52_panel_coords() -> list[tuple[int, int, int]]:
 
 
 def _precompute_box_indices(
-    width: int, x0: int, y0: int, x1: int, y1: int, step: int = 4
+    width: int,
+    x0: int,
+    y0: int,
+    x1: int,
+    y1: int,
+    step: int = 4,
+    height: int | None = None,
 ) -> tuple[list[int], list[int]]:
+    step = max(1, int(step))
+    x0_c = max(0, min(width - 1, int(x0)))
+    x1_c = max(x0_c + 1, min(width, int(x1)))
+    if height is not None:
+        y0_c = max(0, min(height - 1, int(y0)))
+        y1_c = max(y0_c + 1, min(height, int(y1)))
+    else:
+        y0_c = max(0, int(y0))
+        y1_c = max(y0_c + 1, int(y1))
     uv_stride = width // 2
     y_indices: list[int] = []
     uv_indices: list[int] = []
-    for py in range(y0, y1, step):
+    for py in range(y0_c, y1_c, step):
         y_row = py * width
         uv_row = (py >> 1) * uv_stride
-        for px in range(x0, x1, step):
+        for px in range(x0_c, x1_c, step):
             y_indices.append(y_row + px)
             uv_indices.append(uv_row + (px >> 1))
     return y_indices, uv_indices
 
 
+def _scale_rect(
+    x0: int,
+    y0: int,
+    w: int,
+    h: int,
+    width: int,
+    height: int,
+) -> tuple[int, int, int, int]:
+    """Scale a 320x176 reference box to ``(width, height)``, preserving exact integers at 320x176."""
+    if width == DEFAULT_CROP_W and height == DEFAULT_CROP_H:
+        return (x0, y0, w, h)
+    sx = width / float(DEFAULT_CROP_W)
+    sy = height / float(DEFAULT_CROP_H)
+    sw = max(2, min(width, int(round(w * sx))))
+    sh = max(2, min(height, int(round(h * sy))))
+    sx0 = max(0, min(width - sw, int(round(x0 * sx))))
+    sy0 = max(0, min(height - sh, int(round(y0 * sy))))
+    return (sx0, sy0, sw, sh)
+
+
+def _scale_step(base_step: int, width: int, height: int) -> int:
+    if width == DEFAULT_CROP_W and height == DEFAULT_CROP_H:
+        return base_step
+    scale = min(width / float(DEFAULT_CROP_W), height / float(DEFAULT_CROP_H))
+    return max(1, int(round(base_step * scale)))
+
+
 def build_sampling_boxes(
     width: int = DEFAULT_CROP_W,
     height: int = DEFAULT_CROP_H,
-    x_min: int = 3,
-    x_max: int = 315,
-    y_min: int = 2,
-    y_max: int = 170,
-    box_w: int = 14,
-    box_h: int = 12,
+    x_min: int | None = None,
+    x_max: int | None = None,
+    y_min: int | None = None,
+    y_max: int | None = None,
+    box_w: int | None = None,
+    box_h: int | None = None,
     step: int = 2,
 ) -> list[tuple[int, list[int], list[int]]]:
     """Precompute single-strip perimeter sampling boxes for each of the 52 zones."""
-    span_x = (x_max - x_min) - box_w
-    span_y = (y_max - y_min) - box_h
+    sx = width / float(DEFAULT_CROP_W)
+    sy = height / float(DEFAULT_CROP_H)
+    eff_xmin = int(round(3 * sx)) if x_min is None else x_min
+    eff_xmax = int(round(315 * sx)) if x_max is None else x_max
+    eff_ymin = int(round(2 * sy)) if y_min is None else y_min
+    eff_ymax = int(round(170 * sy)) if y_max is None else y_max
+    eff_bw = max(2, int(round(14 * sx))) if box_w is None else box_w
+    eff_bh = max(2, int(round(12 * sy))) if box_h is None else box_h
+    eff_step = _scale_step(step, width, height)
+
+    span_x = max(0, (eff_xmax - eff_xmin) - eff_bw)
+    span_y = max(0, (eff_ymax - eff_ymin) - eff_bh)
     precomputed: list[tuple[int, list[int], list[int]]] = []
     for pid, nx, ny in build_52_panel_coords():
         u = nx / 850.0
         v = 1.0 - (ny / 450.0)
-        x0 = int(round(x_min + u * span_x))
-        y0 = int(round(y_min + v * span_y))
-        x1 = min(width, x0 + box_w)
-        y1 = min(height, y0 + box_h)
-        y_idx, uv_idx = _precompute_box_indices(width, x0, y0, x1, y1, step=step)
+        x0 = int(round(eff_xmin + u * span_x))
+        y0 = int(round(eff_ymin + v * span_y))
+        x1 = min(width, x0 + eff_bw)
+        y1 = min(height, y0 + eff_bh)
+        y_idx, uv_idx = _precompute_box_indices(
+            width, x0, y0, x1, y1, step=eff_step, height=height
+        )
         precomputed.append((pid, y_idx, uv_idx))
     return precomputed
 
@@ -369,6 +432,8 @@ def build_depth_glow_boxes(
     ix_min, ix_max, iy_min, iy_max, iw, ih = 18, 302, 18, 154, 54, 44
     ispan_x = (ix_max - ix_min) - iw
     ispan_y = (iy_max - iy_min) - ih
+    e_step = _scale_step(3, width, height)
+    i_step = _scale_step(8, width, height)
 
     precomputed: list[tuple[int, list[int], list[int], list[int], list[int]]] = []
     for pid, nx, ny in build_52_panel_coords():
@@ -384,8 +449,15 @@ def build_depth_glow_boxes(
             # Lift bottom edge off y=165..170 bezel reflection to y=155..164
             ey0 = 155
             cur_eh = 9
+        sex0, sey0, sew, seh = _scale_rect(ex0, ey0, ew, cur_eh, width, height)
         ey_idx, euv_idx = _precompute_box_indices(
-            width, ex0, ey0, min(width, ex0 + ew), min(height, ey0 + cur_eh), step=3
+            width,
+            sex0,
+            sey0,
+            min(width, sex0 + sew),
+            min(height, sey0 + seh),
+            step=e_step,
+            height=height,
         )
 
         ix0 = int(round(ix_min + u * ispan_x))
@@ -394,8 +466,15 @@ def build_depth_glow_boxes(
         if ey0 >= 152:
             iy0 = 88
             cur_ih = 46
+        six0, siy0, siw, sih = _scale_rect(ix0, iy0, iw, cur_ih, width, height)
         iy_idx, iuv_idx = _precompute_box_indices(
-            width, ix0, iy0, min(width, ix0 + iw), min(height, iy0 + cur_ih), step=8
+            width,
+            six0,
+            siy0,
+            min(width, six0 + siw),
+            min(height, siy0 + sih),
+            step=i_step,
+            height=height,
         )
 
         precomputed.append((pid, ey_idx, euv_idx, iy_idx, iuv_idx))
@@ -422,6 +501,8 @@ def build_auto_crop_depth_boxes(
     ix_min, ix_max, iy_min, iy_max, iw, ih = 18, 302, 18, 154, 54, 44
     ispan_x = (ix_max - ix_min) - iw
     ispan_y = (iy_max - iy_min) - ih
+    e_step = _scale_step(3, width, height)
+    i_step = _scale_step(8, width, height)
 
     precomputed: list[
         tuple[int, list[tuple[list[int], list[int]]], list[int], list[int]]
@@ -458,12 +539,21 @@ def build_auto_crop_depth_boxes(
                 (ex0 - 39, ey0, ew, eh),
             ]
 
-        for sx0, sy0, sw, sh in step_rects:
-            sx0_c = max(0, min(width - sw, sx0))
-            sy0_c = max(0, min(height - sh, sy0))
+        for rx0, ry0, rw, rh in step_rects:
+            rx0_ref = max(0, min(DEFAULT_CROP_W - rw, rx0))
+            ry0_ref = max(0, min(DEFAULT_CROP_H - rh, ry0))
+            sx0_c, sy0_c, sw_c, sh_c = _scale_rect(
+                rx0_ref, ry0_ref, rw, rh, width, height
+            )
             edge_steps.append(
                 _precompute_box_indices(
-                    width, sx0_c, sy0_c, sx0_c + sw, sy0_c + sh, step=3
+                    width,
+                    sx0_c,
+                    sy0_c,
+                    sx0_c + sw_c,
+                    sy0_c + sh_c,
+                    step=e_step,
+                    height=height,
                 )
             )
 
@@ -473,8 +563,15 @@ def build_auto_crop_depth_boxes(
         if ny == 0:
             iy0 = 88
             cur_ih = 46
+        six0, siy0, siw, sih = _scale_rect(ix0, iy0, iw, cur_ih, width, height)
         iy_idx, iuv_idx = _precompute_box_indices(
-            width, ix0, iy0, min(width, ix0 + iw), min(height, iy0 + cur_ih), step=8
+            width,
+            six0,
+            siy0,
+            min(width, six0 + siw),
+            min(height, siy0 + sih),
+            step=i_step,
+            height=height,
         )
 
         precomputed.append((pid, edge_steps, iy_idx, iuv_idx))
@@ -483,12 +580,24 @@ def build_auto_crop_depth_boxes(
 
 def build_diamond_boxes(
     width: int = DEFAULT_CROP_W,
+    height: int = DEFAULT_CROP_H,
 ) -> dict[str, tuple[list[int], list[int]]]:
     """Precompute overhead ceiling sky boxes + far-left wing box (for Kitchen Cabinet sync)."""
+    s_sky = _scale_step(12, width, height)
+    s_wing = _scale_step(10, width, height)
+    sl_x, sl_y, sl_w, sl_h = _scale_rect(40, 8, 120, 48, width, height)
+    sr_x, sr_y, sr_w, sr_h = _scale_rect(160, 8, 120, 48, width, height)
+    fl_x, fl_y, fl_w, fl_h = _scale_rect(8, 28, 64, 116, width, height)
     return {
-        "sky_left": _precompute_box_indices(width, 40, 8, 160, 56, step=12),
-        "sky_right": _precompute_box_indices(width, 160, 8, 280, 56, step=12),
-        "far_left": _precompute_box_indices(width, 8, 28, 72, 144, step=10),
+        "sky_left": _precompute_box_indices(
+            width, sl_x, sl_y, sl_x + sl_w, sl_y + sl_h, step=s_sky, height=height
+        ),
+        "sky_right": _precompute_box_indices(
+            width, sr_x, sr_y, sr_x + sr_w, sr_y + sr_h, step=s_sky, height=height
+        ),
+        "far_left": _precompute_box_indices(
+            width, fl_x, fl_y, fl_x + fl_w, fl_y + fl_h, step=s_wing, height=height
+        ),
     }
 
 
@@ -747,7 +856,7 @@ class RPMLightEngine:
         self.boxes_depth_glow = build_depth_glow_boxes(width, height)
         self.boxes_auto_crop = build_auto_crop_depth_boxes(width, height)
         self.boxes_true_edge = build_sampling_boxes(width, height)
-        self.diamond_boxes = build_diamond_boxes(width)
+        self.diamond_boxes = build_diamond_boxes(width, height)
         self.num_zones = len(self.boxes_auto_crop)
 
         # Neutral warm-white initial chromaticity (never biases red on startup)
@@ -1364,4 +1473,5 @@ class RPMLightEngine:
             energy=energy,
             scene_class=self.scene_class,
             is_video_paused=self.is_video_paused,
+            slider_pct=self.slider_pct,
         )
