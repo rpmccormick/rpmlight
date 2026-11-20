@@ -1,5 +1,12 @@
 """RPMLight: Perceptual Zero-Blink Camera & Screen Ambilight Engine."""
 
+from rpmlight.atmosphere import (
+    CastV2PhotoSink,
+    delay_s_to_slider_pct,
+    is_allowed_personal_album_url,
+    parse_google_photos_album_html,
+    slider_pct_to_delay_s,
+)
 from rpmlight.brilliant_plugin import (
     BrilliantAmbiPluginState,
     start_brilliant_virtual_light,
@@ -37,10 +44,11 @@ from rpmlight.tpu import (
     query_gemini_vision_cue,
 )
 
-__version__ = "0.5.1"
+__version__ = "0.6.0"
 
 __all__ = [
     "BrilliantAmbiPluginState",
+    "CastV2PhotoSink",
     "CropCalibrator",
     "CropMargins",
     "KodiJsonRpcToastSink",
